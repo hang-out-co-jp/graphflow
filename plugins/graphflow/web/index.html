@@ -125,6 +125,21 @@ svg.wire polygon.check{fill:var(--line)}
 
 .rank-row{position:relative;display:flex;gap:28px;align-items:flex-start;padding:8px 0}
 .rank-col{display:flex;flex-direction:column;gap:12px}
+
+/* 繰り返しの帯。図面の上に「ここは何周も回る」と書いておく場所 */
+.loop-band{
+  position:relative;border:1px dashed var(--ai);padding:22px 14px 12px;
+  background:color-mix(in srgb,var(--ai) 5%,transparent);
+}
+.loop-cap{
+  position:absolute;top:-1px;left:-1px;display:flex;align-items:baseline;gap:10px;
+  padding:2px 9px;background:var(--ai);color:#fff;flex-wrap:wrap;max-width:calc(100% + 2px);
+}
+.loop-cap .stencil{color:#fff}
+.loop-cap.bad{background:var(--shu)}
+.loop-cond,.loop-judge{font-size:10.5px;white-space:nowrap}
+.loop-judge{opacity:.85}
+.loop-cols{display:flex;gap:28px;align-items:flex-start}
 /* 段の見出し。「同時に走る」を伝えるのはここだけ */
 .rank-head{
   display:flex;align-items:baseline;gap:7px;min-height:17px;
@@ -326,6 +341,12 @@ pre{
     </div>
 
     <div class="sect">
+      <span class="stencil">繰り返し</span>
+      <p class="hint">合格するまで同じ段を回します。止まらなくなるので、停止条件は必須です。</p>
+      <div id="loopctl"></div>
+    </div>
+
+    <div class="sect">
       <span class="stencil">上限</span>
       <label class="f"><span class="stencil">総エージェント数</span>
         <input class="in" type="number" id="f-cap" min="1" max="1000"></label>
@@ -402,7 +423,33 @@ let sel = null;
 let findings = [];
 
 function blank() {
-  return { name: "", goal: "", anchors: [], caps: { max: 8, conc: 5 }, nodes: [] };
+  return {
+    name: "", goal: "", anchors: [], caps: { max: 8, conc: 5 }, nodes: [],
+    // 繰り返しは部品ではなく「帯」。どの段からどの段までを、何周まで回すか。
+    loop: { from: "", to: "", max: 5, dry: 2 },
+  };
+}
+
+/* 帯が今どの段からどの段に掛かっているか。段は依存から毎回引き直すので、
+   帯もノードに紐づけて持ち、表示のたびに段へ変換する。 */
+function loopRange() {
+  const L = S.loop;
+  if (!L || !L.from || !L.to) return null;
+  const a = S.nodes.find(n => n.id === L.from);
+  const b = S.nodes.find(n => n.id === L.to);
+  if (!a || !b) return null;
+  const rk = ranks();
+  if (rk[a.id] == null || rk[b.id] == null || rk[b.id] < rk[a.id]) return null;
+  return { a: rk[a.id], b: rk[b.id], from: a, to: b };
+}
+
+/* 帯の中の検証ノードのうち、いちばん後ろのもの。これが合否を出す。 */
+function loopJudge() {
+  const L = loopRange();
+  if (!L) return null;
+  const rk = ranks();
+  const inside = S.nodes.filter(n => n.kind === "verify" && rk[n.id] >= L.a && rk[n.id] <= L.b);
+  return inside.length ? inside[inside.length - 1] : null;
 }
 
 function newNode(kind) {
@@ -496,6 +543,26 @@ function inspect() {
 
   if (cyclic()) push("K-21", "依存が循環しています。順番が決まりません", null);
 
+  // 繰り返しの帯
+  if (S.loop && (S.loop.from || S.loop.to)) {
+    if (!S.loop.from || !S.loop.to)
+      push("K-24", "繰り返しの範囲が半分しか決まっていません", null);
+    else if (!loopRange())
+      push("K-24", "繰り返しの終わりが、始まりより前の段にあります", null);
+    else {
+      const LR = loopRange();
+      if (!loopJudge())
+        push("K-25", "繰り返しの中に検証がありません。何をもって合格とするか決まらず、止まりません", null);
+      if (!S.loop.max) push("K-26", "繰り返しの最大周回数が未設定です。止まらなくなります", null);
+      if (!S.loop.dry) push("K-27", "空回りの判定回数が未設定です。指摘が出なくなっても回り続けます", null);
+      // 実行中に人の承認は挟めない＝ゲートをまたぐ繰り返しは動かせない
+      const segs = segments();
+      const si = segs.findIndex(s => s.some(n => n.id === LR.from.id));
+      const sj = segs.findIndex(s => s.some(n => n.id === LR.to.id));
+      if (si !== sj) push("K-28", "繰り返しが人間ゲートをまたいでいます。実行中に承認は挟めません", null);
+    }
+  }
+
   // 同じ段に並んだ仕事は「まとめて」同時に走る。上限は段ごとに見る。
   if (!cyclic() && S.caps.conc) {
     const rk = ranks(), wide = {};
@@ -510,8 +577,10 @@ function inspect() {
     });
   }
 
+  const judge = loopJudge();
   for (const n of S.nodes) {
     if (n.kind === "gate") continue;
+    if (judge && n.id === judge.id) continue;   // 判定の結果は繰り返しの停止条件が使っている
     const used = S.nodes.some(m => m.deps.includes(n.id) || m.target === n.id);
     if (!used && n.kind !== "synthesize" && S.nodes.length > 1)
       push("K-22", `「${n.title || KIND[n.kind].ja}」の結果を誰も受け取っていません`, n, true);
@@ -520,8 +589,13 @@ function inspect() {
 }
 
 function estimate() {
-  return S.nodes.reduce((a, n) => a + (n.kind === "fanout" ? Math.max(1, n.items.filter(Boolean).length)
-    : n.kind === "gate" || n.kind === "reduce" ? 0 : 1), 0);
+  const LR = loopRange();
+  const rk = LR ? ranks() : null;
+  // 帯の中は最大周回数だけ繰り返し走る。見積りに掛けないと上限が意味を失う。
+  const rounds = n => (LR && rk[n.id] >= LR.a && rk[n.id] <= LR.b) ? Math.max(1, S.loop.max || 1) : 1;
+  return S.nodes.reduce((a, n) => a + rounds(n) *
+    (n.kind === "fanout" ? Math.max(1, n.items.filter(Boolean).length)
+      : n.kind === "gate" || n.kind === "reduce" ? 0 : 1), 0);
 }
 
 /* a が b に（依存をたどって）行き着くか。循環になる線を出さないために使う。 */
@@ -589,6 +663,7 @@ function render() {
   drawInspector();
   drawTitleBlock();
   drawAnchors();
+  drawLoopControls();
   $("#f-name").value = S.name;
   $("#f-goal").value = S.goal;
   $("#f-cap").value = S.caps.max || "";
@@ -618,6 +693,8 @@ function drawCanvas() {
     seg.forEach(n => (cols[r[n.id]] ||= []).push(n));
     const row = el("div", "rank-row");
     const keys = Object.keys(cols).map(Number).sort((a, b) => a - b);
+    const LR = loopRange();
+    let loopBox = null;                    // 繰り返しの帯
     keys.forEach((k, i) => {
       const col = el("div", "rank-col");
       const head = el("div", "rank-head");
@@ -630,7 +707,27 @@ function drawCanvas() {
         kind => insertStageBefore(cols[k], kind)));
       col.appendChild(head);
       cols[k].forEach(n => col.appendChild(nodeEl(n)));
-      row.appendChild(col);
+
+      const inLoop = LR && k >= LR.a && k <= LR.b && seg.some(n => n.id === LR.from.id);
+      if (inLoop) {
+        if (!loopBox) {
+          loopBox = el("div", "loop-band");
+          const cap = el("div", "loop-cap");
+          cap.appendChild(el("span", "stencil", "繰り返す"));
+          cap.appendChild(el("span", "loop-cond",
+            `最大 ${S.loop.max || "?"} 周 / ${S.loop.dry || "?"} 周続けて新しい指摘が無ければ終了`));
+          const j = loopJudge();
+          cap.appendChild(el("span", "loop-judge",
+            j ? `合否は「${j.title || "検証"}」が出す` : "🔴 合否を出す検証がありません"));
+          if (!j) cap.classList.add("bad");
+          loopBox.appendChild(cap);
+          loopBox.appendChild(el("div", "loop-cols"));
+          row.appendChild(loopBox);
+        }
+        loopBox.querySelector(".loop-cols").appendChild(col);
+      } else {
+        row.appendChild(col);
+      }
     });
     // ゲートは流れの続きなので、段を変えず右端に置く
     if (seg.gate) {
@@ -973,6 +1070,37 @@ function liveUpdate() {
   drawTitleBlock();
 }
 
+function drawLoopControls() {
+  const w = $("#loopctl"); w.textContent = "";
+  const rk = ranks();
+  const opts = order().filter(n => n.kind !== "gate")
+    .map(n => [n.id, `${rk[n.id] + 1}段目 ${n.title || KIND[n.kind].ja}`]);
+  w.appendChild(sel_("どの段から", S.loop.from, opts, v => S.loop.from = v));
+  w.appendChild(sel_("どの段まで", S.loop.to, opts, v => S.loop.to = v));
+  if (!S.loop.from && !S.loop.to) {
+    w.appendChild(el("p", "hint", "（繰り返しなし）"));
+    return;
+  }
+  const a = el("label", "f");
+  a.appendChild(el("span", "stencil", "最大 何周まで"));
+  a.appendChild(numin(S.loop.max, v => S.loop.max = v));
+  w.appendChild(a);
+  const b = el("label", "f");
+  b.appendChild(el("span", "stencil", "何周 空回りしたら終了"));
+  b.appendChild(numin(S.loop.dry, v => S.loop.dry = v));
+  b.appendChild(el("small", "hint", "新しい指摘が出なかった周を数えます"));
+  w.appendChild(b);
+  const off = el("button", "add danger", "繰り返しをやめる");
+  off.onclick = () => { S.loop = { from: "", to: "", max: 5, dry: 2 }; render(); };
+  w.appendChild(off);
+}
+function numin(val, on) {
+  const i = el("input", "in"); i.type = "number"; i.min = "1"; i.max = "50";
+  i.value = val || "";
+  i.oninput = () => { on(+i.value || 0); scheduleRender(); };
+  return i;
+}
+
 function drawAnchors() {
   const w = $("#anchors"); w.textContent = "";
   S.anchors.forEach((a, i) => {
@@ -1159,8 +1287,39 @@ function generate() {
       return [];
     };
 
+    /* 繰り返しの帯。実行中に人の入力は挟めないので、帯は1枚の図面に収まっている
+       （またぐ設計は点検が K-28 で止める）。 */
+    const LR = loopRange();
+    const inThisSeg = LR && seg.some(n => n.id === LR.from.id);
+    const looped = n => inThisSeg && rk[n.id] >= LR.a && rk[n.id] <= LR.b;
+    const asg = n => looped(n) ? `r_${n.id} = ` : `const r_${n.id} = `;
+
     for (const k of Object.keys(groups).map(Number).sort((a, b) => a - b)) {
       const g = groups[k];
+
+      if (inThisSeg && k === LR.a) {
+        const body = seg.filter(looped);
+        L.push("// 繰り返しの中で作り直す値は、外に出しておく");
+        body.forEach(n => {
+          L.push(`let r_${n.id}`);
+          if (n.kind === "verify") L.push(`let r_${n.id}_kept`);
+        });
+        // 対象リストは毎周同じなので外に出す
+        body.filter(n => n.kind === "fanout").forEach(n =>
+          L.push(`const r_${n.id}_items = ${JSON.stringify(n.items.filter(Boolean), null, 2)}`));
+        L.push("");
+        L.push(`const 最大周回 = ${S.loop.max}`);
+        L.push(`const 空回りで終了 = ${S.loop.dry}`);
+        L.push("let 周 = 0, 空回り = 0");
+        L.push("const 既知の指摘 = new Set()");
+        L.push("");
+        L.push(`// ┌─ 繰り返す（${LR.a + 1}段目〜${LR.b + 1}段目）`);
+        L.push("//    合格するまで。止まらないので、周回数と空回りの両方で必ず抜ける。");
+        L.push("while (周 < 最大周回 && 空回り < 空回りで終了) {");
+        L.push("周++");
+        L.push("log(`繰り返し ${周}周目（最大 ${最大周回}）`)");
+        L.push("");
+      }
       // 整理はコードなので先に置く（エージェントを立てず、同じ段の誰も待たない）
       for (const n of g.filter(x => x.kind === "reduce")) {
         const v = "r_" + n.id;
@@ -1169,7 +1328,7 @@ function generate() {
         L.push(`// 整理はLLMを呼びません。重複削除と件数確認は素のコードの方が安く速く確実です。`);
         L.push(`const ${v}_in = [${dep.join(", ")}].flat().filter(Boolean)`);
         L.push(`const ${v}_seen = new Set()`);
-        L.push(`const ${v} = ${v}_in.filter(x => {`);
+        L.push(`${asg(n)}${v}_in.filter(x => {`);
         L.push("  const k = JSON.stringify(x)");
         L.push(`  if (${v}_seen.has(k)) return false`);
         L.push(`  ${v}_seen.add(k); return true`);
@@ -1206,20 +1365,46 @@ function generate() {
 
       L.push(`phase(${jstr(KIND[agents[0].kind].phase)})`);
       for (const n of agents.filter(x => x.kind === "fanout"))
-        L.push(`const r_${n.id}_items = ${JSON.stringify(n.items.filter(Boolean), null, 2)}`);
+        if (!looped(n)) L.push(`const r_${n.id}_items = ${JSON.stringify(n.items.filter(Boolean), null, 2)}`);
       if (agents.some(x => x.kind === "verify"))
         L.push("// 検証者には作業者の会話履歴を渡しません。完成物と基準だけを渡します。");
 
       if (agents.length === 1) {
-        L.push(`const r_${agents[0].id} = await ${exprOf(agents[0])}`);
+        L.push(`${asg(agents[0])}await ${exprOf(agents[0])}`);
       } else {
         L.push(`// この段の ${agents.length} 本は互いに依存していないので、まとめて同時に走らせます。`);
-        L.push(`const [${agents.map(n => "r_" + n.id).join(", ")}] = await parallel([`);
+        const tmp = `_段${k}`;
+        L.push(`const ${tmp} = await parallel([`);
         agents.forEach(n => L.push(`  () => ${exprOf(n)},`));
         L.push("])");
+        agents.forEach((n, i) => L.push(`${asg(n)}${tmp}[${i}]`));
       }
-      agents.forEach(n => { postOf(n).forEach(x => L.push(x)); done.add(n.id); });
+      agents.forEach(n => {
+        postOf(n).forEach(x => L.push(looped(n) && /^const (r_\w+_kept)/.test(x)
+          ? x.replace(/^const /, "") : x));
+        done.add(n.id);
+      });
       L.push("");
+
+      if (inThisSeg && k === LR.b) {
+        const j = loopJudge();
+        const jv = j ? "r_" + j.id : null;
+        if (jv) {
+          L.push("// 合否。まだ落ちているもののうち、前の周に無かったものだけを「新しい指摘」と数える。");
+          L.push(`const 未合格 = ${jv}.filter(v => v.verdict === "DROP")`);
+          L.push("const 印 = v => JSON.stringify(v.item ?? v.reason ?? v)");
+          L.push("const 新しい指摘 = 未合格.filter(v => !既知の指摘.has(印(v)))");
+          L.push("新しい指摘.forEach(v => 既知の指摘.add(印(v)))");
+          L.push("if (新しい指摘.length === 0) 空回り++; else 空回り = 0");
+          L.push("log(`${周}周目: 未合格 ${未合格.length}件 / 新しい指摘 ${新しい指摘.length}件`"
+            + " + ` / 空回り ${空回り}/${空回りで終了}`)");
+          L.push("if (未合格.length === 0) { log(`${周}周目で全部通りました`); break }");
+        }
+        L.push("}");
+        L.push("// └─ 繰り返し ここまで");
+        L.push("if (周 >= 最大周回) log(`⚠ ${最大周回}周まで回しましたが終わっていません。残りは人が見てください。`)");
+        L.push("");
+      }
     }
 
     if (seg.gate) {
@@ -1321,6 +1506,33 @@ const TEMPLATES = {
       { k: "gate", t: "公開してよいか人が決める", d: [7],
         j: "公開は不可逆です。ここで一度止まります。" },
     ]),
+
+  // 繰り返しの例。テストを実施 → 直す → 判定 を、合格するまで回す。
+  "UI操作の不備を潰す": () => {
+    const s = buildGraph("uiux-sweep", "画面の操作不備を洗い出し、直しきる",
+      ["実際に操作して再現できた", "コンソールにエラーが出ていない"], { max: 60, conc: 8 }, [
+        { k: "fanout", t: "操作パターンを洗い出す", d: [],
+          j: "指定された画面領域について、人が取りうる操作を洗い出してテストケースにします。再現手順は、誰がやっても同じ結果になるまで具体的に書きます。",
+          items: ["部品箱", "図面（キャンバス）", "右パネル", "段の挿入", "表題欄と書き出し", "読込と保存", "キーボード操作", "明暗と画面幅"],
+          o: [["操作", "string"], ["手順", "array"], ["期待する結果", "string"]],
+          f: "手順を具体化できないものは出さず、理由を残す" },
+        { k: "reduce", t: "重複を畳む", d: [0], o: [["kept", "number"]] },
+        { k: "synthesize", t: "テスト一覧にする", d: [1],
+          j: "テストケースを、実施する順に並べた一覧にします。",
+          o: [["cases", "array"]], f: "実施できないものは落として理由を書く" },
+        { k: "single", t: "テストを実施する", d: [2],
+          j: "テスト一覧を、実際にブラウザを操作して実施します。⚠ ブラウザは1つしかないので直列に行います（並列にすると互いのブラウザを奪い合います）。",
+          o: [["results", "array"], ["failed", "number"]],
+          f: "操作そのものができない場合は、成功扱いにせず失敗として記録する" },
+        { k: "single", t: "落ちたものを直す", d: [3],
+          j: "失敗したテストの原因を探して直します。仕様を変えないと直らないものは直さず、印を付けて残します。",
+          o: [["fixed", "array"]], f: "原因を特定できないものは直さず、理由を残す" },
+        { k: "verify", t: "直ったか判定する", d: [4], lens: "再現手順を実際に踏んで直っているか",
+          o: [["verdict", "string"]], f: "確認できないものは unverified にする" },
+      ]);
+    s.loop = { from: s.nodes[3].id, to: s.nodes[5].id, max: 5, dry: 2 };
+    return s;
+  },
 
   "営業提案": () => build("sales-proposal", "商談で使える提案書一式を、推測と事実を混ぜずに作る",
     ["顧客が実際に発言・提供した情報", "公開されている一次情報"], { max: 10, conc: 5 }, [
