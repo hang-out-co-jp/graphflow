@@ -430,6 +430,56 @@ function blank() {
   };
 }
 
+/* 読み込んだ図面を、こちらの想定する形に整える。
+   ・古い版で保存した図面（繰り返しを持たない等）を開けるようにする
+   ・手で編集されて壊れた図面（存在しないIDを指す線など）で落ちないようにする */
+const OUT_TYPES = ["string", "number", "boolean", "array"];
+function normalize(d) {
+  const base = blank();
+  const c = (d && d.caps) || {};
+  const lp = (d && d.loop) || {};
+  const s = {
+    name: typeof d.name === "string" ? d.name : "",
+    goal: typeof d.goal === "string" ? d.goal : "",
+    anchors: Array.isArray(d.anchors) ? d.anchors.filter(x => typeof x === "string") : [],
+    caps: { max: +c.max || base.caps.max, conc: +c.conc || base.caps.conc },
+    loop: {
+      from: typeof lp.from === "string" ? lp.from : "",
+      to: typeof lp.to === "string" ? lp.to : "",
+      max: +lp.max || 5, dry: +lp.dry || 2,
+    },
+    nodes: [],
+  };
+  const ids = new Set();
+  (Array.isArray(d.nodes) ? d.nodes : []).forEach(n => {
+    if (!n || typeof n.id !== "string" || ids.has(n.id) || !KIND[n.kind]) return;
+    ids.add(n.id);
+    s.nodes.push({
+      id: n.id, kind: n.kind,
+      title: String(n.title ?? ""), job: String(n.job ?? ""),
+      items: n.kind === "fanout" ? (Array.isArray(n.items) ? n.items.map(String) : []) : null,
+      outputs: Array.isArray(n.outputs)
+        ? n.outputs.filter(o => o && typeof o.name === "string")
+            .map(o => ({ name: o.name, type: OUT_TYPES.includes(o.type) ? o.type : "string" }))
+        : [],
+      fail: String(n.fail ?? ""),
+      deps: Array.isArray(n.deps) ? n.deps.filter(x => typeof x === "string") : [],
+      edgeChecked: !!n.edgeChecked,
+      irreversible: !!n.irreversible,
+      countCheck: n.kind === "reduce" ? n.countCheck !== false : false,
+      target: typeof n.target === "string" ? n.target : "",
+      lens: String(n.lens ?? ""),
+    });
+  });
+  // 存在しない相手を指す線と検証対象は捨てる（読んだ瞬間に落ちないため）
+  s.nodes.forEach(n => {
+    n.deps = [...new Set(n.deps.filter(dp => ids.has(dp) && dp !== n.id))];
+    if (!ids.has(n.target)) n.target = "";
+  });
+  if (!ids.has(s.loop.from) || !ids.has(s.loop.to)) { s.loop.from = ""; s.loop.to = ""; }
+  return s;
+}
+
 /* 帯が今どの段からどの段に掛かっているか。段は依存から毎回引き直すので、
    帯もノードに紐づけて持ち、表示のたびに段へ変換する。 */
 function loopRange() {
@@ -543,6 +593,11 @@ function inspect() {
 
   if (cyclic()) push("K-21", "依存が循環しています。順番が決まりません", null);
 
+  // ゲートは図面の切れ目であって仕事ではない。中身が無い図面は書き出せない。
+  segments().forEach((sg, i) => {
+    if (!sg.length) push("K-29", `${i + 1}枚目の図面に仕事がありません（人間ゲートだけです）`, null);
+  });
+
   // 繰り返しの帯
   if (S.loop && (S.loop.from || S.loop.to)) {
     if (!S.loop.from || !S.loop.to)
@@ -652,7 +707,7 @@ function segments() {
     if (n.kind === "gate") { segs[segs.length - 1].gate = n; segs.push([]); }
     else segs[segs.length - 1].push(n);
   }
-  return segs.filter(s => s.length);
+  return segs.filter(s => s.length || s.gate);   // ゲートだけの図面も1枚として数える
 }
 function segmentOf(id) { return segments().findIndex(s => s.some(n => n.id === id)); }
 
@@ -896,6 +951,8 @@ function removeNode(id) {
     x.deps = x.deps.filter(d => d !== id);
     if (x.target === id) x.target = "";
   });
+  // 繰り返しの端になっていた部品なら、繰り返しの設定も片付ける
+  if (S.loop && (S.loop.from === id || S.loop.to === id)) { S.loop.from = ""; S.loop.to = ""; }
   if (sel === id) sel = null;
   render();
 }
@@ -1142,22 +1199,38 @@ function drawTitleBlock() {
 }
 
 /* ══ コード生成 ══════════════════════════════════════════ */
+
+/* 人が書いた文字を、テンプレートリテラルの中へそのまま置くための逃がし。
+   🔴 バッククォートだけでなく ${ } も逃がす。
+   逃がさないと「価格は ${価格} 円」がJavaScriptの式として評価され、
+   構文は通るのに実行時に壊れる／意図しない値が混ざる。
+   \ も先に逃がさないと、\` のような入力で順番が狂う。 */
+function lit(s) {
+  return String(s ?? "")
+    .replace(/\\/g, "\\\\")
+    .replace(/`/g, "\\`")
+    .replace(/\$\{/g, "\\${");
+}
+
 function schemaOf(n) {
   const outs = n.outputs.filter(o => o.name.trim());
   const props = {}; outs.forEach(o => props[o.name.trim()] = { type: o.type });
   return { type: "object", required: outs.map(o => o.name.trim()), properties: props };
 }
+/* 人が書いた欄は、ここで1つずつ逃がす。
+   機械側の意図的な埋め込み（${JSON.stringify(item)} など）は逃がしてはいけないので、
+   文字列全体に lit() を掛けず、人の入力だけに掛ける。 */
 function promptOf(n) {
   const L = [];
-  L.push(n.job.trim());
+  L.push(lit(n.job.trim()));
   L.push("");
-  L.push("GOAL: " + S.goal.trim());
+  L.push("GOAL: " + lit(S.goal.trim()));
   if (S.anchors.filter(Boolean).length) {
     L.push("");
     L.push("ANCHOR — 何をもって正しいとするか:");
-    S.anchors.filter(Boolean).forEach(a => L.push("- " + a));
+    S.anchors.filter(Boolean).forEach(a => L.push("- " + lit(a)));
   }
-  if (n.fail.trim()) { L.push(""); L.push("FAIL: " + n.fail.trim()); }
+  if (n.fail.trim()) { L.push(""); L.push("FAIL: " + lit(n.fail.trim())); }
   return L.join("\n");
 }
 function verifyPrompt(n, t) {
@@ -1165,8 +1238,8 @@ function verifyPrompt(n, t) {
     "あなたは作成者ではなく、独立した検証者です。",
     "作成者の推論や会話履歴は参照しません。渡された完成物と基準だけで判断します。",
     "",
-    `観点: ${n.lens.trim() || "正確性"}`,
-    n.job.trim(),
+    `観点: ${lit(n.lens.trim()) || "正確性"}`,
+    lit(n.job.trim()),
     "",
     "以下の主張が間違っている可能性を優先して探してください。",
     "1. 主張は出典によって本当に支持されているか",
@@ -1177,8 +1250,8 @@ function verifyPrompt(n, t) {
     "",
     "確認できない場合は refuted ではなく unverified にします。",
     "",
-    `対象（${t ? (t.title || t.id) : "?"} の出力）:`,
-    "${JSON.stringify(item)}",
+    `対象（${t ? lit(t.title || t.id) : "?"} の出力）:`,
+    "${JSON.stringify(item)}",   // ← これは機械側の埋め込み。逃がさない
   ].join("\n");
 }
 
@@ -1230,7 +1303,7 @@ function generate() {
       if (n.kind === "fanout") {
         return [
           `parallel(${v}_items.map((対象) => () =>`,
-          `    agent(\`${promptOf(n).replace(/`/g, "\\`")}\n\n対象: \${対象}${ctxOf(n)}\`, {`,
+          `    agent(\`${promptOf(n)}\n\n対象: \${対象}${ctxOf(n)}\`, {`,
           `      label: \`\${対象}\`,`,
           `      phase: ${jstr(KIND[n.kind].phase)},`,
           `      schema: ${JSON.stringify(schemaOf(n))},`,
@@ -1243,7 +1316,7 @@ function generate() {
         const tv = t ? "r_" + t.id : "[]";
         return [
           `parallel([${tv}].flat().filter(Boolean).map((item, i) => () =>`,
-          `    agent(\`${verifyPrompt(n, t).replace(/`/g, "\\`")}\`, {`,
+          `    agent(\`${verifyPrompt(n, t)}\`, {`,
           `      label: \`検証:\${i + 1}\`,`,
           `      phase: "検証",`,
           `      schema: { type: "object", required: ["verdict", "reason"], properties: {`,
@@ -1266,7 +1339,7 @@ function generate() {
           + kept.map(d => "${JSON.stringify(" + d + ")}").join("\n")
         : "";
       return [
-        `agent(\`${promptOf(n).replace(/`/g, "\\`")}${ctx2}\`, {`,
+        `agent(\`${promptOf(n)}${ctx2}\`, {`,
         `    label: ${jstr(n.title || KIND[n.kind].ja)},`,
         `    phase: ${jstr(KIND[n.kind].phase)},`,
         `    schema: ${JSON.stringify(schemaOf(n))},`,
@@ -1417,7 +1490,8 @@ function generate() {
     }
 
     const last = seg[seg.length - 1];
-    L.push(`return { result: r_${last.id}, cap: CAP }`);
+    L.push(last ? `return { result: r_${last.id}, cap: CAP }`
+                : "return { result: null, cap: CAP }   // この図面には仕事がありません");
     return { file: nm + ".js", code: L.join("\n") };
   });
 }
@@ -1623,8 +1697,8 @@ $("#btn-load").onclick = () => {
     r.onload = () => {
       try {
         const d = JSON.parse(r.result);
-        if (!d.nodes) throw new Error("nodes がありません");
-        S = d; seq = S.nodes.length;
+        if (!d || !Array.isArray(d.nodes)) throw new Error("nodes がありません");
+        S = normalize(d); seq = S.nodes.length;
         S.nodes.forEach(n => { const m = /^n(\d+)$/.exec(n.id); if (m) seq = Math.max(seq, +m[1]); });
         sel = null; render();
       } catch (e) { alert("この図面は読めません: " + e.message); }
@@ -1664,8 +1738,9 @@ $("#btn-theme").onclick = () => {
 };
 
 /* graphflow コマンドから図面を渡された場合はそれを開く */
-if (window.__GRAPHFLOW_PRELOAD__ && window.__GRAPHFLOW_PRELOAD__.nodes) {
-  S = window.__GRAPHFLOW_PRELOAD__;
+if (window.__GRAPHFLOW_PRELOAD__ && Array.isArray(window.__GRAPHFLOW_PRELOAD__.nodes)) {
+  S = normalize(window.__GRAPHFLOW_PRELOAD__);
+  seq = S.nodes.length;
   S.nodes.forEach(n => { const m = /^n(\d+)$/.exec(n.id); if (m) seq = Math.max(seq, +m[1]); });
 }
 

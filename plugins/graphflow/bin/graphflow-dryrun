@@ -1,0 +1,112 @@
+#!/usr/bin/env node
+/**
+ * 書き出したワークフローを、AIを1体も呼ばずに空回しする。
+ *
+ *   graphflow-dryrun .claude/workflows/foo.js
+ *
+ * agent() は本物のAIを呼ばず、契約(schema)どおりの形をした
+ * 偽の返事をその場で作って返す。これで次のことが分かる。
+ *
+ *   ・そもそも最後まで走るか（構文だけでなく実行時に落ちないか）
+ *   ・AIを何体呼ぶことになるか
+ *   ・繰り返しが本当に止まるか（検証がずっと不合格を返す最悪の場合）
+ *
+ * 課金は発生しない。依存パッケージなし。Node 18 以降。
+ */
+"use strict";
+
+const fs = require("fs");
+const path = require("path");
+const vm = require("vm");
+
+const argv = process.argv.slice(2);
+if (!argv.length || argv[0] === "-h" || argv[0] === "--help") {
+  console.log(`書き出したワークフローを、AIを呼ばずに空回しします。
+
+  graphflow-dryrun <ワークフロー.js> [--pass]
+
+  --pass   検証がすべて合格(KEEP)を返す前提で回す。
+           既定はすべて不合格(DROP)＝繰り返しが最悪どこまで回るかを見る。`);
+  process.exit(argv.length ? 0 : 1);
+}
+
+const file = argv[0];
+const 全部合格 = argv.includes("--pass");
+
+let code;
+try { code = fs.readFileSync(path.resolve(file), "utf8"); }
+catch (e) { console.error(`読めません: ${e.message}`); process.exit(1); }
+
+/* 契約(schema)から、形だけ合っている偽の返事を作る */
+function 偽の返事(schema, verdict) {
+  if (!schema || schema.type !== "object") return { ok: true };
+  const o = {};
+  for (const [k, v] of Object.entries(schema.properties || {})) {
+    if (k === "verdict") { o[k] = verdict; continue; }
+    o[k] = v.type === "number" ? 1
+      : v.type === "boolean" ? true
+      : v.type === "array" ? [`${k}のサンプル`]
+      : `${k}のサンプル`;
+  }
+  return o;
+}
+
+let 呼んだ数 = 0, 周 = 0;
+const 節 = new Map();
+let 現在の節 = "(節なし)";
+const ログ = [];
+
+const ctx = {
+  agent: async (prompt, opts = {}) => {
+    呼んだ数++;
+    const 節名 = opts.phase || 現在の節;
+    節.set(節名, (節.get(節名) || 0) + 1);
+    if (呼んだ数 > 1000) throw new Error("エージェントが1000体を超えました（実行側の上限）");
+    return 偽の返事(opts.schema, 全部合格 ? "KEEP" : "DROP");
+  },
+  parallel: async (ts) => {
+    if (!Array.isArray(ts)) throw new Error("parallel には配列を渡します");
+    return Promise.all(ts.map(t => (typeof t === "function" ? t() : t)));
+  },
+  pipeline: async (items, ...stages) => {
+    const out = [];
+    for (let i = 0; i < items.length; i++) {
+      let v = items[i];
+      for (const st of stages) v = await st(v, items[i], i);
+      out.push(v);
+    }
+    return out;
+  },
+  phase: (t) => { 現在の節 = t; if (!節.has(t)) 節.set(t, 0); },
+  log: (m) => { ログ.push(String(m)); if (String(m).startsWith("繰り返し ")) 周++; },
+  args: argv[1] && !argv[1].startsWith("--") ? argv[1] : undefined,
+  budget: { total: null, spent: () => 0, remaining: () => Infinity },
+  workflow: async () => { throw new Error("空回しでは他のワークフローを呼べません"); },
+  JSON, Math, Array, Object, String, Number, Boolean, Set, Map, Promise, console,
+};
+
+(async () => {
+  const src = code.replace(/^export\s+const\s+meta/m, "const meta");
+  const t0 = process.hrtime.bigint();
+  let 戻り値;
+  try {
+    戻り値 = await new vm.Script(`(async()=>{${src}})()`, { filename: file })
+      .runInNewContext(ctx, { timeout: 20000 });
+  } catch (e) {
+    console.error(`\n🔴 ${path.basename(file)} は最後まで走りませんでした`);
+    console.error(`   ${e.message}`);
+    if (ログ.length) console.error(`   途中まで: ${ログ.slice(-3).join(" / ")}`);
+    process.exit(1);
+  }
+  const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+
+  console.log(`\n✅ ${path.basename(file)} は最後まで走りました（${ms.toFixed(0)}ms）\n`);
+  console.log(`  呼ぶAIの数: ${呼んだ数} 体`);
+  if (周) console.log(`  繰り返し:   ${周} 周${全部合格 ? "" : "（検証がずっと不合格を返す最悪の場合）"}`);
+  console.log("  節ごとの数:");
+  for (const [k, v] of 節) console.log(`    ${k}: ${v} 体`);
+  const 欠損 = ログ.filter(l => l.includes("INCOMPLETE") || l.startsWith("⚠"));
+  if (欠損.length) { console.log("\n  ⚠ 出た警告:"); 欠損.forEach(l => console.log(`    ${l}`)); }
+  console.log(`\n  戻り値の項目: ${戻り値 && typeof 戻り値 === "object" ? Object.keys(戻り値).join(", ") : String(戻り値)}`);
+  if (!全部合格 && 周) console.log("\n  ※ --pass を付けると「全部合格」の前提でも回せます。");
+})();
