@@ -300,7 +300,7 @@ pre{
   <div class="wordmark">GRAPH<span>FLOW</span></div>
   <div class="hd-field">
     <span class="stencil">図面名</span>
-    <input id="f-name" pattern="[a-z0-9][a-z0-9-]*" spellcheck="false" aria-label="図面名（コマンド名になる）">
+    <input id="f-name" pattern="[a-z0-9][a-z0-9\-]*" spellcheck="false" aria-label="図面名（コマンド名になる）">
   </div>
   <div class="hd-field" style="flex:1;min-width:200px">
     <span class="stencil">目的</span>
@@ -357,7 +357,7 @@ pre{
       <span class="legend">→ 線は依存。<b>線が入っていない仕事は、最初から同時に走ります。</b></span>
       <span class="stencil" id="scale-note">—</span>
     </div>
-    <div class="canvas-inner" id="canvas"></div>
+    <div class="canvas-inner" id="canvas" tabindex="-1"></div>
   </div>
 
   <!-- ── 右：ノード詳細 ── -->
@@ -579,6 +579,9 @@ function inspect() {
     if (n.kind === "verify") {
       if (!n.target || !byId[n.target]) push("K-12", `「${at}」が誰を検証するのか未指定です`, n);
       else if (n.target === n.id) push("K-12", `「${at}」が自分自身を検証しています`, n);
+      else if (!reaches(n.id, n.target))
+        push("K-34", `「${at}」が自分より後ろ（または無関係）の「${byId[n.target].title || KIND[byId[n.target].kind].ja}」を検証しています。`
+          + "検証は手前の段の結果にしか掛けられません", n);
       if (!n.lens.trim()) push("K-13", `「${at}」の観点が空です。3人が同じ角度で見ても独立にはなりません`, n);
     }
     if (n.irreversible) {
@@ -748,7 +751,34 @@ function segments() {
 function segmentOf(id) { return segments().findIndex(s => s.some(n => n.id === id)); }
 
 /* ══ 描画 ══════════════════════════════════════════════ */
+
+/* render() は画面をまるごと作り直すので、そのままだとフォーカスが body に落ちる。
+   キーボードだけで操作している人は、1操作ごとにページ先頭からタブし直しになる。
+   作り直す前に「いまフォーカスしている要素の位置」を控え、作り直した後に同じ位置へ戻す。 */
+const FOCUSABLE = 'a[href],button,input,select,textarea,[role="button"],[tabindex]:not([tabindex="-1"])';
+const FOCUS_BOXES = "#inspector,#tb-list,#loopctl,#anchors,.col.left,header,.titleblock";
+function focusKey(e) {
+  if (!e || e === document.body || !e.closest) return null;
+  const node = e.closest(".node");
+  if (node && node.dataset.nid)
+    return { q: `#canvas .node[data-nid="${node.dataset.nid}"]` + (e.classList.contains("node-x") ? " .node-x" : "") };
+  const box = e.closest(FOCUS_BOXES);
+  if (!box) return null;
+  const i = [...box.querySelectorAll(FOCUSABLE)].indexOf(e);
+  if (i < 0) return null;
+  return { box: box.id ? "#" + box.id : "." + box.className.trim().split(/\s+/).join("."), i };
+}
+function restoreFocus(k) {
+  if (!k) return;
+  let t = null;
+  if (k.q) t = document.querySelector(k.q);
+  else { const box = document.querySelector(k.box); if (box) t = [...box.querySelectorAll(FOCUSABLE)][k.i]; }
+  if (t && typeof t.focus === "function") t.focus();
+}
+
 function render() {
+  const af = document.activeElement;
+  const keep = af && af !== document.body ? focusKey(af) : null;
   findings = inspect();
   drawCanvas();
   drawInspector();
@@ -759,6 +789,19 @@ function render() {
   $("#f-goal").value = S.goal;
   $("#f-cap").value = S.caps.max || "";
   $("#f-conc").value = S.caps.conc || "";
+  if (keep && document.activeElement === document.body) restoreFocus(keep);
+}
+
+/* 1手だけ戻せるようにする。取り消せない削除は、押し間違いがそのまま損失になる。 */
+let undoSnap = null;
+function snapshot() { undoSnap = JSON.stringify({ S, sel }); }
+function undo() {
+  if (!undoSnap) return false;
+  const d = JSON.parse(undoSnap);
+  undoSnap = null;
+  S = normalize(d.S); sel = d.sel;
+  render();
+  return true;
 }
 
 function badges(id) { return findings.filter(f => f.node && f.node.id === id && !f.warn).length; }
@@ -770,7 +813,9 @@ function drawCanvas() {
     e.innerHTML = "左の<b>部品箱</b>から部品を置くと、依存の深さで図面が自動で起きます。<br><br>"
       + "描く順番ではなく<b>依存だけ</b>が段を決めます。前の結果を必要としない仕事は、勝手に同じ段に並びます。"
       + "<br><br>迷ったら上の<code>ひな形</code>から実物を1枚読んでください。";
-    c.appendChild(e); return;
+    c.appendChild(e);
+    $("#scale-note").textContent = "—";   // 空の図面に前の規模が残らないように
+    return;
   }
   const segs = segments();
   segs.forEach((seg, si) => {
@@ -826,6 +871,9 @@ function drawCanvas() {
       const head = el("div", "rank-head");
       head.appendChild(el("span", "n", `${keys.length + 1}段目`));
       head.appendChild(el("span", "sim", "ここで人が止まる"));
+      // ゲートの手前にも段を入れられるようにする（他の段にだけ＋があると穴になる）
+      head.appendChild(insertPicker("＋ この前に一段", "人間ゲートの手前に入れる",
+        kind => insertStageBefore([seg.gate], kind)));
       col.appendChild(head);
       col.appendChild(nodeEl(seg.gate));
       row.appendChild(col);
@@ -921,8 +969,13 @@ function nodeEl(n) {
   if (k) b.appendChild(el("span", "shu-mark", String(k)));
   b.onclick = () => { sel = n.id; render(); };
   b.onkeydown = e => {
+    // 内側の「×」ボタンに来たキーを親が食べると、キーボードから外せなくなる
+    if (e.target !== b) return;
     if (e.key === "Enter" || e.key === " ") { e.preventDefault(); sel = n.id; render(); }
-    if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); removeNode(n.id); }
+    // 削除は「選んでいる部品」だけ。フォーカスが当たっただけの部品が消えるのは事故
+    if ((e.key === "Delete" || e.key === "Backspace") && sel === n.id) {
+      e.preventDefault(); removeNode(n.id);
+    }
   };
   return b;
 }
@@ -980,8 +1033,14 @@ function changeKind(n, k) {
   render();
 }
 
-/* 部品を外す。外した部品を指していた矢印と検証対象も一緒に外す。 */
+/* 部品を外す。外した部品を指していた矢印と検証対象も一緒に外す。
+   外した直後は、隣の部品にフォーカスを移す（キーボードだけの人が図面から放り出されないように）。
+   1手だけ戻せる（Ctrl/Cmd+Z）。 */
 function removeNode(id) {
+  snapshot();
+  const list = [...document.querySelectorAll("#canvas .node")].map(e => e.dataset.nid);
+  const at = list.indexOf(id);
+  const nextFocus = list[at + 1] || list[at - 1] || null;
   S.nodes = S.nodes.filter(x => x.id !== id);
   S.nodes.forEach(x => {
     x.deps = x.deps.filter(d => d !== id);
@@ -991,6 +1050,8 @@ function removeNode(id) {
   if (S.loop && (S.loop.from === id || S.loop.to === id)) { S.loop.from = ""; S.loop.to = ""; }
   if (sel === id) sel = null;
   render();
+  const f = nextFocus && document.querySelector(`#canvas .node[data-nid="${nextFocus}"]`);
+  (f || document.querySelector("#canvas")).focus?.();
 }
 
 /* ══ 右欄 ══════════════════════════════════════════════ */
@@ -1027,8 +1088,12 @@ function drawInspector() {
         + "⚠ 対象だけを書くと「何についての対象か」が伝わりません。主語は目的（GOAL）に書いてください。"));
 
     if (n.kind === "verify") {
-      sect.appendChild(sel_("検証する相手", n.target, S.nodes.filter(x => x.id !== n.id && x.kind !== "gate")
-        .map(x => [x.id, x.title || KIND[x.kind].ja]), v => n.target = v));
+      /* 🔴 自分より後ろの段は検証できない。
+         段は依存だけで決まるので、下流を対象にすると生成コードが「まだ無い結果」を読む。
+         候補は「依存をたどって自分から行き着ける部品（＝手前の段）」だけに絞る。 */
+      sect.appendChild(sel_("検証する相手", n.target,
+        S.nodes.filter(x => x.id !== n.id && x.kind !== "gate" && reaches(n.id, x.id))
+          .map(x => [x.id, x.title || KIND[x.kind].ja]), v => n.target = v));
       sect.appendChild(field("観点（角度を変える）", n.lens, v => n.lens = v));
       sect.appendChild(note("この検証者には作業者の会話履歴を渡しません。完成物と基準だけを渡し、"
         + "「間違っている理由を優先して探せ」と指示するコードを生成します。"));
@@ -1226,7 +1291,7 @@ function drawTitleBlock() {
   const ac = S.anchors.filter(a => a.trim()).length;
   set("#tb-anchor", ac ? `${ac}件` : "未", ac ? "pass" : "flag");
   set("#tb-cap", S.caps.max ? `${estimate()} / ${S.caps.max}` : "未", S.caps.max ? "" : "flag");
-  set("#tb-gate", `${segments().length || 1}枚`);
+  set("#tb-gate", S.nodes.length ? `${segments().length || 1}枚` : "—");
 
   const list = $("#tb-list"); list.textContent = "";
   [...block, ...warn].forEach(f => {
@@ -1896,6 +1961,8 @@ $("#btn-load").onclick = () => {
   const inp = el("input"); inp.type = "file"; inp.accept = ".json,application/json";
   inp.onchange = () => {
     const f = inp.files[0]; if (!f) return;
+    // ひな形と同じく、描きかけを黙って捨てない
+    if (S.nodes.length && !confirm("いま描いている図面は消えます。読み込みますか？")) return;
     const r = new FileReader();
     r.onload = () => {
       try {
@@ -1918,20 +1985,56 @@ $("#dlg-copy").onclick = async () => {
 $("#dlg-dl").onclick = () => {
   const b = new Blob([tabs[cur].code], { type: "text/plain" });
   const a = el("a"); a.href = URL.createObjectURL(b); a.download = tabs[cur].file; a.click();
-  URL.revokeObjectURL(a.href); $("#dlg-msg").textContent = "保存しました";
+  URL.revokeObjectURL(a.href); $("#dlg-msg").textContent = "ダウンロードしました";
 };
 $("#dlg-save").onclick = async () => {
   $("#dlg-msg").textContent = "保存中…";
+  let res;
   try {
-    const res = await fetch("/write", {
+    res = await fetch("/write", {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ files: tabs.map(t => ({ name: t.file, code: t.code })) }),
     });
-    const j = await res.json();
-    if (!res.ok) throw new Error(j.error || res.statusText);
-    $("#dlg-msg").textContent = `${j.written.length}件を保存しました → /${S.name}`;
-  } catch (e) { $("#dlg-msg").textContent = "保存できませんでした: " + e.message; }
+  } catch {
+    /* サーバーが止まっている / 通信できない。ここで英語の例外文を出しても
+       打つ手が分からないので、逃げ道（ダウンロード）まで書く。 */
+    $("#dlg-msg").textContent =
+      "保存できませんでした。graphflow のサーバーが止まっているようです。"
+      + "ターミナルで graphflow を起動し直してから、もう一度押してください。"
+      + "急ぐときは「ダウンロード」で手元に落とせます（図面は消えていません）";
+    return;
+  }
+  /* 本文がJSONとは限らない（403・404 は空で返る）。先に文字列で受けて、
+     読めたときだけ中身を使う。ここで例外を出すと理由が消える。 */
+  const text = await res.text().catch(() => "");
+  let j = null;
+  try { j = text ? JSON.parse(text) : null; } catch { j = null; }
+  if (!res.ok || !j || !Array.isArray(j.written)) {
+    $("#dlg-msg").textContent = "保存できませんでした: "
+      + ((j && j.error) || `サーバーが ${res.status} を返しました`)
+      + "。「ダウンロード」で手元に落とせます";
+    return;
+  }
+  const ow = (j.overwritten || []).length;
+  $("#dlg-msg").textContent = `${j.written.length}件を保存しました`
+    + (ow ? `（うち${ow}件を上書き）` : "") + ` → /${S.name} で起動できます`;
 };
+
+/* 図面の余白を押したら選択を外す。「選ぶ」があって「やめる」が無いと、
+   ×が出っぱなしのまま別の場所を触ることになる。 */
+document.querySelector(".canvas-wrap").addEventListener("click", e => {
+  if (!e.target.closest(".node") && sel !== null) { sel = null; render(); }
+});
+
+/* 1手だけ戻す。削除は取り消せないと押し間違いがそのまま損失になる。 */
+document.addEventListener("keydown", e => {
+  const t = e.target;
+  if ((e.key === "z" || e.key === "Z") && (e.metaKey || e.ctrlKey) && !e.shiftKey) {
+    if (t && t.matches && t.matches("input, textarea")) return;   // 文字入力の取り消しは邪魔しない
+    if (undo()) e.preventDefault();
+  }
+  if (e.key === "Escape" && !$("#dlg").open && sel !== null) { sel = null; render(); }
+});
 
 $("#btn-theme").onclick = () => {
   const cur = document.documentElement.getAttribute("data-theme");
