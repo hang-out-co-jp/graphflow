@@ -396,18 +396,28 @@ function blank() {
 }
 
 function newNode(kind) {
-  const last = S.nodes[S.nodes.length - 1];
+  /* 依存の既定値は種類で決める。
+     並列と単発は「素材を取ってくる側」なので、既定は依存なし＝1段目に並ぶ。
+     何も考えずに前の部品へ繋ぐと、記事が言うとおり
+     「人が書いた順番」がそのまま偽のエッジになって直列化する。
+     整理・検証・統合・ゲートは、定義上その前の結果を食べるので、
+     まだ誰にも使われていない部品（末端）を既定の依存にする。 */
+  const leaves = S.nodes.filter(n =>
+    !S.nodes.some(m => m.deps.includes(n.id) || m.target === n.id));
+  const downstream = kind === "reduce" || kind === "verify"
+    || kind === "synthesize" || kind === "gate";
+  const deps = downstream ? leaves.map(n => n.id) : [];
   return {
     id: nid(), kind,
     title: "", job: "",
     items: kind === "fanout" ? [] : null,
     outputs: kind === "gate" ? [] : [{ name: "", type: "string" }],
     fail: "",
-    deps: last ? [last.id] : [],
+    deps,
     edgeChecked: false,
     irreversible: false,
     countCheck: kind === "reduce",
-    target: kind === "verify" ? (last ? last.id : "") : "",
+    target: kind === "verify" ? (leaves.length === 1 ? leaves[0].id : "") : "",
     lens: "",
   };
 }
@@ -475,6 +485,20 @@ function inspect() {
     push("K-20", `見積り${est}体が自分で決めた上限${S.caps.max}体を超えています`, null);
 
   if (cyclic()) push("K-21", "依存が循環しています。順番が決まりません", null);
+
+  // 同じ段に並んだ仕事は「まとめて」同時に走る。上限は段ごとに見る。
+  if (!cyclic() && S.caps.conc) {
+    const rk = ranks(), wide = {};
+    S.nodes.forEach(n => {
+      if (n.kind === "gate" || n.kind === "reduce") return;
+      const w = n.kind === "fanout" ? Math.max(1, n.items.filter(Boolean).length) : 1;
+      wide[rk[n.id]] = (wide[rk[n.id]] || 0) + w;
+    });
+    Object.keys(wide).map(Number).sort((a, b) => a - b).forEach((k, i) => {
+      if (wide[k] > S.caps.conc)
+        push("K-23", `${i + 1}段目は同時に ${wide[k]} 本になり、並列上限 ${S.caps.conc} を超えています`, null);
+    });
+  }
 
   for (const n of S.nodes) {
     if (n.kind === "gate") continue;
@@ -943,30 +967,85 @@ function generate() {
     L.push(`const CAP = ${S.caps.max}   // 総エージェント数の上限`);
     L.push("");
 
+    /* 段ごとに出す。同じ段のノードは互いに依存していないので、
+       ひとつの parallel に入れて本当に同時に走らせる。
+       （順番に await すると、図面が「同時」と言っているのに直列に動いてしまう） */
+    const rk = ranks();
+    const groups = {};
+    seg.forEach(n => (groups[rk[n.id]] ||= []).push(n));
     const done = new Set();
-    for (const n of seg) {
+
+    const depsOf = n => n.deps.filter(d => done.has(d)).map(d => "r_" + d);
+    const ctxOf = n => {
+      const dep = depsOf(n);
+      return dep.length ? `\n\n前段の結果:\n` + dep.map(d => "${JSON.stringify(" + d + ")}").join("\n") : "";
+    };
+
+    // エージェントを立てるノードを、await できる式1つにする
+    const exprOf = n => {
       const v = "r_" + n.id;
-      const dep = n.deps.filter(d => done.has(d)).map(d => "r_" + d);
-      const ctx = dep.length
-        ? `\n\n前段の結果:\n` + dep.map(d => "${JSON.stringify(" + d + ")}").join("\n")
-        : "";
-
-      // 整理はエージェントを立てないので進捗の節を作らない
-      if (n.kind !== "reduce") L.push(`phase(${jstr(KIND[n.kind].phase)})`);
-
       if (n.kind === "fanout") {
-        const items = n.items.filter(Boolean);
-        L.push(`const ${v}_items = ${JSON.stringify(items, null, 2).replace(/\n/g, "\n")}`);
-        L.push(`const ${v} = (await parallel(${v}_items.map((angle, i) => () =>`);
-        L.push(`  agent(\`${promptOf(n).replace(/`/g, "\\`")}\n\n対象: \${angle}${ctx}\`, {`);
-        L.push(`    label: \`\${angle}\`,`);
-        L.push(`    phase: ${jstr(KIND[n.kind].phase)},`);
-        L.push(`    schema: ${JSON.stringify(schemaOf(n))},`);
-        L.push("  })")
-        L.push("))).filter(Boolean)");
-        L.push(`log(\`${n.title || "並列"}: \${${v}.length}/\${${v}_items.length} 件が返りました\`)`);
+        return [
+          `parallel(${v}_items.map((対象) => () =>`,
+          `    agent(\`${promptOf(n).replace(/`/g, "\\`")}\n\n対象: \${対象}${ctxOf(n)}\`, {`,
+          `      label: \`\${対象}\`,`,
+          `      phase: ${jstr(KIND[n.kind].phase)},`,
+          `      schema: ${JSON.stringify(schemaOf(n))},`,
+          `    })`,
+          `  )).then(a => a.filter(Boolean))`,
+        ].join("\n");
       }
-      else if (n.kind === "reduce") {
+      if (n.kind === "verify") {
+        const t = S.nodes.find(x => x.id === n.target);
+        const tv = t ? "r_" + t.id : "[]";
+        return [
+          `parallel([${tv}].flat().filter(Boolean).map((item, i) => () =>`,
+          `    agent(\`${verifyPrompt(n, t).replace(/`/g, "\\`")}\`, {`,
+          `      label: \`検証:\${i + 1}\`,`,
+          `      phase: "検証",`,
+          `      schema: { type: "object", required: ["verdict", "reason"], properties: {`,
+          `        verdict: { type: "string", enum: ["KEEP", "DROP", "UNVERIFIED"] },`,
+          `        reason: { type: "string" },`,
+          `        needed: { type: "string" } } },`,
+          `    }).then(v => ({ item, ...v }))`,
+          `  )).then(a => a.filter(Boolean))`,
+        ].join("\n");
+      }
+      const kept = depsOf(n).map(d => {
+        const dn = S.nodes.find(x => "r_" + x.id === d);
+        return dn && dn.kind === "verify" ? d + "_kept" : d;
+      });
+      const ctx2 = kept.length
+        ? `\n\n使ってよい材料（検証を通ったものだけ）:\n` + kept.map(d => "${JSON.stringify(" + d + ")}").join("\n")
+        : "";
+      return [
+        `agent(\`${promptOf(n).replace(/`/g, "\\`")}${ctx2}\`, {`,
+        `    label: ${jstr(n.title || KIND[n.kind].ja)},`,
+        `    phase: ${jstr(KIND[n.kind].phase)},`,
+        `    schema: ${JSON.stringify(schemaOf(n))},`,
+        `  })`,
+      ].join("\n");
+    };
+
+    // 走らせたあとに要る後処理（進捗ログ・検証の絞り込み）
+    const postOf = n => {
+      const v = "r_" + n.id;
+      if (n.kind === "fanout")
+        return [`log(\`${n.title || "並列"}: \${${v}.length}/\${${v}_items.length} 件が返りました\`)`];
+      if (n.kind === "verify")
+        return [
+          `const ${v}_kept = ${v}.filter(x => x.verdict === "KEEP")`,
+          `log(\`検証: KEEP \${${v}_kept.length} / DROP \${${v}.filter(x=>x.verdict==="DROP").length} / UNVERIFIED \${${v}.filter(x=>x.verdict==="UNVERIFIED").length}\`)`,
+        ];
+      return [];
+    };
+
+    for (const k of Object.keys(groups).map(Number).sort((a, b) => a - b)) {
+      const g = groups[k];
+      // 整理はコードなので先に置く（エージェントを立てず、同じ段の誰も待たない）
+      for (const n of g.filter(x => x.kind === "reduce")) {
+        const v = "r_" + n.id;
+        const dep = depsOf(n);
         const src = dep[0] || "[]";
         L.push(`// 整理はLLMを呼びません。重複削除と件数確認は素のコードの方が安く速く確実です。`);
         L.push(`const ${v}_in = [${dep.join(", ")}].flat().filter(Boolean)`);
@@ -978,14 +1057,16 @@ function generate() {
         L.push("})");
         if (n.countCheck) {
           // 「重複で減った」と「返ってこなかった」は別物。欠損だけを INCOMPLETE にする。
-          const fan = n.deps.filter(d => {
-            const dn = S.nodes.find(x => x.id === d);
-            return dn && dn.kind === "fanout";
-          });
+          // 並列は投入数、単発は1本として数える。数え落とすと欠損に気づけない。
+          const srcs = n.deps
+            .map(d => S.nodes.find(x => x.id === d))
+            .filter(dn => dn && dn.kind !== "reduce" && dn.kind !== "gate");
+          const exp = srcs.map(dn => dn.kind === "fanout" ? `r_${dn.id}_items.length` : "1");
+          const got = srcs.map(dn => dn.kind === "fanout" ? `r_${dn.id}.length` : `(r_${dn.id} ? 1 : 0)`);
           L.push(`// 静かに失敗した1件を完成扱いにしないための件数確認`);
-          if (fan.length) {
-            L.push(`const ${v}_expected = ${fan.map(d => `r_${d}_items.length`).join(" + ")}`);
-            L.push(`const ${v}_returned = ${fan.map(d => `r_${d}.length`).join(" + ")}`);
+          if (srcs.length) {
+            L.push(`const ${v}_expected = ${exp.join(" + ")}`);
+            L.push(`const ${v}_returned = ${got.join(" + ")}`);
           } else {
             L.push(`const ${v}_expected = ${v}_in.length`);
             L.push(`const ${v}_returned = ${v}_in.length`);
@@ -997,40 +1078,29 @@ function generate() {
           L.push(`if (${v}_status === "INCOMPLETE") log("⚠ 返らなかった仕事があります。この結果を完成として扱わないでください。")`);
         }
         void src;
+        L.push("");
+        done.add(n.id);
       }
-      else if (n.kind === "verify") {
-        const t = S.nodes.find(x => x.id === n.target);
-        const tv = t ? "r_" + t.id : "[]";
-        L.push(`// 検証者には作業者の会話履歴を渡しません。完成物と基準だけを渡します。`);
-        L.push(`const ${v} = (await parallel([${tv}].flat().filter(Boolean).map((item, i) => () =>`);
-        L.push(`  agent(\`${verifyPrompt(n, t).replace(/`/g, "\\`")}\`, {`);
-        L.push(`    label: \`検証:\${i + 1}\`,`);
-        L.push(`    phase: "検証",`);
-        L.push(`    schema: { type: "object", required: ["verdict", "reason"], properties: {`);
-        L.push(`      verdict: { type: "string", enum: ["KEEP", "DROP", "UNVERIFIED"] },`);
-        L.push(`      reason: { type: "string" },`);
-        L.push(`      needed: { type: "string" } } },`);
-        L.push("  }).then(v => ({ item, ...v }))");
-        L.push("))).filter(Boolean)");
-        L.push(`const ${v}_kept = ${v}.filter(x => x.verdict === "KEEP")`);
-        L.push(`log(\`検証: KEEP \${${v}_kept.length} / DROP \${${v}.filter(x=>x.verdict==="DROP").length} / UNVERIFIED \${${v}.filter(x=>x.verdict==="UNVERIFIED").length}\`)`);
+
+      const agents = g.filter(x => x.kind !== "reduce");
+      if (!agents.length) continue;
+
+      L.push(`phase(${jstr(KIND[agents[0].kind].phase)})`);
+      for (const n of agents.filter(x => x.kind === "fanout"))
+        L.push(`const r_${n.id}_items = ${JSON.stringify(n.items.filter(Boolean), null, 2)}`);
+      if (agents.some(x => x.kind === "verify"))
+        L.push("// 検証者には作業者の会話履歴を渡しません。完成物と基準だけを渡します。");
+
+      if (agents.length === 1) {
+        L.push(`const r_${agents[0].id} = await ${exprOf(agents[0])}`);
+      } else {
+        L.push(`// この段の ${agents.length} 本は互いに依存していないので、まとめて同時に走らせます。`);
+        L.push(`const [${agents.map(n => "r_" + n.id).join(", ")}] = await parallel([`);
+        agents.forEach(n => L.push(`  () => ${exprOf(n)},`));
+        L.push("])");
       }
-      else {
-        const kept = dep.map(d => {
-          const dn = S.nodes.find(x => "r_" + x.id === d);
-          return dn && dn.kind === "verify" ? d + "_kept" : d;
-        });
-        const ctx2 = kept.length
-          ? `\n\n使ってよい材料（検証を通ったものだけ）:\n` + kept.map(d => "${JSON.stringify(" + d + ")}").join("\n")
-          : "";
-        L.push(`const ${v} = await agent(\`${promptOf(n).replace(/`/g, "\\`")}${ctx2}\`, {`);
-        L.push(`  label: ${jstr(n.title || KIND[n.kind].ja)},`);
-        L.push(`  phase: ${jstr(KIND[n.kind].phase)},`);
-        L.push(`  schema: ${JSON.stringify(schemaOf(n))},`);
-        L.push("})");
-      }
+      agents.forEach(n => { postOf(n).forEach(x => L.push(x)); done.add(n.id); });
       L.push("");
-      done.add(n.id);
     }
 
     if (seg.gate) {
@@ -1095,6 +1165,44 @@ const TEMPLATES = {
         null, [["body", "string"], ["word_count", "number"]], "材料が足りない節は書かず、不足を明記する"],
       ["gate", "公開してよいか人が決める", "公開は不可逆です。ここで一度止まります。"],
     ]),
+  // 1段目に「並列」を3本置く例。調べる対象が違うものは、別々の並列にする。
+  "新商品の立ち上げ": () => buildGraph("product-launch",
+    "新商品の訴求を決め、出す物を一気に作る",
+    ["公式サイトの表記（一次情報）", "実際に売れた数", "景品表示法の条文"],
+    { max: 16, conc: 12 }, [
+      { k: "fanout", t: "競合の料金を調べる", d: [],
+        j: "指定された競合1社の料金体系を調べます。出典URLと確認日を必ず付けます。",
+        items: ["競合A", "競合B", "競合C", "競合D"],
+        o: [["lowest_price", "number"], ["main_plan", "string"], ["source_url", "string"]],
+        f: "公式情報を確認できない場合は、推測せず status を unverified にする" },
+      { k: "fanout", t: "顧客の不満を集める", d: [],
+        j: "指定された場所の口コミから、顧客の不満を抜き出します。原文の引用を必ず添えます。",
+        items: ["レビューサイト", "SNS", "自社問い合わせ"],
+        o: [["complaint", "string"], ["quote", "string"], ["source_url", "string"]],
+        f: "原文を引けない不満は採用しない" },
+      { k: "single", t: "表現リスクを確認する", d: [],
+        j: "景品表示法と薬機法の観点から、使ってはいけない表現を洗い出します。条文を引用します。",
+        o: [["ng_expressions", "array"], ["article", "string"]],
+        f: "条文を特定できない指摘は書かず、要確認として残す" },
+      { k: "reduce", t: "重複を畳む", d: [0, 1, 2], o: [["kept", "number"]] },
+      { k: "synthesize", t: "訴求を決める", d: [3],
+        j: "調べた材料から、この商品を誰にどう訴えるかを1つに決めます。根拠を必ず添えます。",
+        o: [["positioning", "string"], ["reason", "string"]],
+        f: "材料が足りない場合は決めず、何が足りないかを書く" },
+      { k: "fanout", t: "出す物を書く", d: [4],
+        j: "決まった訴求に沿って、指定された媒体向けの原稿を書きます。使ってはいけない表現は使いません。",
+        items: ["LP", "X投稿", "リール台本", "メール"],
+        o: [["draft", "string"], ["media", "string"]],
+        f: "訴求から外れる案は書かず、理由を残す" },
+      { k: "verify", t: "炎上リスクを見る", d: [5], lens: "表現リスクとブランド整合",
+        o: [["verdict", "string"]], f: "判断できないものは unverified にする" },
+      { k: "synthesize", t: "出す物をまとめる", d: [6],
+        j: "検証を通った原稿だけをまとめ、媒体ごとに並べます。",
+        o: [["package", "string"]], f: "落とした原稿は理由とともに末尾に残す" },
+      { k: "gate", t: "公開してよいか人が決める", d: [7],
+        j: "公開は不可逆です。ここで一度止まります。" },
+    ]),
+
   "営業提案": () => build("sales-proposal", "商談で使える提案書一式を、推測と事実を混ぜずに作る",
     ["顧客が実際に発言・提供した情報", "公開されている一次情報"], { max: 10, conc: 5 }, [
       ["fanout", "顧客まわりを調べる", "指定された観点で顧客企業を調べます。顧客が実際に提供した情報と、こちらが推測した情報を必ず分けて書きます。",
@@ -1108,6 +1216,28 @@ const TEMPLATES = {
       ["gate", "顧客に送ってよいか人が決める", "外部送信は不可逆です。ここで一度止まります。"],
     ]),
 };
+
+/* 依存を添字で明示する版。分岐や合流があるひな形はこちらで書く。 */
+function buildGraph(name, goal, anchors, caps, rows) {
+  seq = 0;
+  const s = blank();
+  s.name = name; s.goal = goal; s.anchors = anchors; s.caps = caps;
+  const made = [];
+  for (const r of rows) {
+    const prev = S; S = s;               // newNode が末端を見るので一時的に差し替える
+    const n = newNode(r.k);
+    S = prev;
+    n.title = r.t; n.job = r.j || "";
+    n.deps = (r.d || []).map(i => made[i].id);
+    n.edgeChecked = true;
+    if (r.items) n.items = r.items;
+    if (r.o) n.outputs = r.o.map(([nm, ty]) => ({ name: nm, type: ty }));
+    if (r.f) n.fail = r.f;
+    if (r.k === "verify") { n.target = made[r.d[0]].id; n.lens = r.lens || ""; }
+    s.nodes.push(n); made.push(n);
+  }
+  return s;
+}
 
 function build(name, goal, anchors, caps, rows) {
   seq = 0;
