@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>GraphFlow 検図盤 — Claude Code ワークフロー設計</title>
+<title>GraphFlow — 業務フロー設計盤</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%231B1E21'/><path d='M3 8h3M10 5h3M10 11h3M6 8l4-3M6 8l4 3' stroke='%23F1F2F4' stroke-width='1.2' fill='none'/><circle cx='13.4' cy='3' r='2' fill='%23D0342C'/></svg>">
 <style>
 :root{
@@ -105,13 +105,17 @@ main{flex:1;display:grid;grid-template-columns:190px minmax(0,1fr) 326px;min-hei
 .canvas-wrap{position:relative;overflow:auto;height:100%;background:var(--sunk)}
 .canvas-inner{position:relative;padding:26px;min-width:100%;width:max-content}
 svg.wire{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
-svg.wire path{fill:none;stroke:var(--line);stroke-width:1.25}
-svg.wire path.check{stroke-dasharray:3 3;stroke:var(--ink-3)}
-svg.wire polygon{fill:var(--line)}
+svg.wire path{fill:none;stroke:var(--ink-3);stroke-width:1.6}
+svg.wire path.check{stroke-dasharray:4 3;stroke:var(--line)}
+svg.wire polygon{fill:var(--ink-3)}
+svg.wire polygon.check{fill:var(--line)}
 .grid-note{
-  position:sticky;top:0;z-index:3;display:flex;gap:16px;align-items:center;
+  position:sticky;top:0;left:0;z-index:3;display:flex;gap:16px;align-items:center;
   padding:7px 26px;background:var(--sunk);border-bottom:1px solid var(--line-2);
 }
+.grid-note .legend{font-size:11.5px;color:var(--ink-3);white-space:nowrap}
+.grid-note .legend b{color:var(--ink-2);font-weight:600}
+.grid-note #scale-note{margin-left:auto;white-space:nowrap}
 .seg-band{
   position:relative;margin:0 0 4px;padding:5px 0 3px;
   border-top:1px solid var(--line-2);
@@ -121,12 +125,29 @@ svg.wire polygon{fill:var(--line)}
 
 .rank-row{position:relative;display:flex;gap:28px;align-items:flex-start;padding:8px 0}
 .rank-col{display:flex;flex-direction:column;gap:12px}
+/* 段の見出し。「同時に走る」を伝えるのはここだけ */
+.rank-head{
+  display:flex;align-items:baseline;gap:7px;min-height:17px;
+  padding-bottom:3px;border-bottom:1px solid var(--line-2);
+}
+.rank-head .n{font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--ink-3)}
+.rank-head .sim{
+  font-size:10px;font-weight:600;color:var(--ai);
+  border:1px solid var(--ai);padding:0 5px;white-space:nowrap;
+}
 
 .node{
   position:relative;width:172px;background:var(--ground);
   border:1px solid var(--line);cursor:pointer;text-align:left;padding:0;
   display:block;
 }
+/* 選んだ部品にだけ出る、外すボタン */
+.node-x{
+  flex:none;width:18px;height:18px;line-height:1;padding:0;
+  background:transparent;border:1px solid var(--line-2);color:var(--ink-3);
+  cursor:pointer;font-family:var(--mono);font-size:12px;
+}
+.node-x:hover{border-color:var(--shu);color:var(--shu);background:var(--shu-soft)}
 .node:hover{border-color:var(--ink-2)}
 .node.sel{border-color:var(--ai);box-shadow:0 0 0 2px var(--ai-soft)}
 .node.bad{border-color:var(--shu)}
@@ -220,7 +241,7 @@ textarea.in{resize:vertical;min-height:56px;line-height:1.6}
   @keyframes ready{from{transform:scale(.94);opacity:.4}to{transform:none;opacity:1}}
 }
 
-/* ── 出図ダイアログ ───────────────────────────── */
+/* ── 書き出しダイアログ ───────────────────────────── */
 dialog{
   border:1px solid var(--line);background:var(--ground);color:var(--ink);
   padding:0;width:min(920px,94vw);max-height:88dvh;
@@ -280,7 +301,7 @@ pre{
     <div class="sect">
       <span class="stencil">部品箱</span>
       <button class="part" data-k="single"><b>単発</b><i>1担当が1回で終える仕事</i></button>
-      <button class="part" data-k="fanout"><b>並列調査</b><i>観点ごとに同時に走らせる</i></button>
+      <button class="part" data-k="fanout"><b>並列</b><i>同じ仕事を、対象を変えて同時に回す</i></button>
       <button class="part" data-k="reduce"><b>整理</b><i>重複を消し件数を数える。コードでやる</i></button>
       <button class="part" data-k="verify"><b>検証</b><i>別文脈で「間違い」を探す</i></button>
       <button class="part" data-k="synthesize"><b>統合</b><i>検証を通ったものだけで仕上げる</i></button>
@@ -298,9 +319,9 @@ pre{
       <span class="stencil">上限</span>
       <label class="f"><span class="stencil">総エージェント数</span>
         <input class="in" type="number" id="f-cap" min="1" max="1000"></label>
-      <label class="f"><span class="stencil">1回のFan-out並列数</span>
+      <label class="f"><span class="stencil">1回の並列で走らせる上限</span>
         <input class="in" type="number" id="f-conc" min="1" max="16"></label>
-      <p class="hint">実行側の上限は同時16・総計1000。超える設計は出図できません。</p>
+      <p class="hint">実行側の上限は同時16・総計1000。超える設計は書き出せません。</p>
     </div>
   </div></div>
 
@@ -308,7 +329,8 @@ pre{
   <div class="canvas-wrap">
     <div class="grid-note">
       <span class="stencil">図面</span>
-      <span class="stencil" id="scale-note">尺度 — / 節 —</span>
+      <span class="legend">→ 線は依存。<b>線が入っていない仕事は、最初から同時に走ります。</b></span>
+      <span class="stencil" id="scale-note">—</span>
     </div>
     <div class="canvas-inner" id="canvas"></div>
   </div>
@@ -319,20 +341,20 @@ pre{
 
 <!-- ── 表題欄 ── -->
 <div class="titleblock">
-  <div class="tb" id="tb-findings"><span class="stencil">検図</span><b>—</b></div>
+  <div class="tb" id="tb-findings"><span class="stencil">点検</span><b>—</b></div>
   <div class="tb" id="tb-anchor"><span class="stencil">アンカー</span><b>—</b></div>
   <div class="tb" id="tb-cap"><span class="stencil">上限</span><b>—</b></div>
   <div class="tb" id="tb-gate"><span class="stencil">図面枚数</span><b>—</b></div>
   <div class="tb-list" id="tb-list"></div>
   <div class="tb-actions">
-    <button class="issue" id="btn-issue" disabled>出図</button>
+    <button class="issue" id="btn-issue" disabled>書き出す</button>
   </div>
 </div>
 </div>
 
 <dialog id="dlg">
   <div class="dlg-hd">
-    <span class="stencil">出図 — 検図済</span>
+    <span class="stencil">書き出し</span>
     <button class="ghost" id="dlg-x">閉じる</button>
   </div>
   <div class="tabs" id="dlg-tabs"></div>
@@ -355,7 +377,7 @@ const jstr = s => JSON.stringify(String(s ?? ""));
 
 const KIND = {
   single:     { ja: "単発",     phase: "実行" },
-  fanout:     { ja: "並列調査", phase: "調査" },
+  fanout:     { ja: "並列",     phase: "並列" },
   reduce:     { ja: "整理",     phase: "整理" },
   verify:     { ja: "検証",     phase: "検証" },
   synthesize: { ja: "統合",     phase: "統合" },
@@ -390,8 +412,8 @@ function newNode(kind) {
   };
 }
 
-/* ══ 検図 ══════════════════════════════════════════════
-   ここが本体。指摘(block)が1件でもあれば出図できない。 */
+/* ══ 点検 ══════════════════════════════════════════════
+   ここが本体。指摘(block)が1件でもあれば書き出せない。 */
 function inspect() {
   const f = [];
   const push = (code, msg, node, warn) => f.push({ code, msg, node: node || null, warn: !!warn });
@@ -422,8 +444,8 @@ function inspect() {
       push("K-8", `「${at}」の依存が偽のエッジか未検査です`, n);
     if (n.kind === "fanout") {
       const c = n.items.filter(Boolean).length;
-      if (!c) push("K-9", `「${at}」に並列で回す観点がありません`, n);
-      if (c > S.caps.conc) push("K-10", `「${at}」の観点${c}件が並列上限${S.caps.conc}を超えています`, n);
+      if (!c) push("K-9", `「${at}」に並列で回す対象がありません`, n);
+      if (c > S.caps.conc) push("K-10", `「${at}」の対象${c}件が並列上限${S.caps.conc}を超えています`, n);
     }
     if (n.kind === "reduce" && !n.countCheck)
       push("K-11", `「${at}」で件数確認をしていません。静かに欠けた1件に気づけません`, n);
@@ -548,14 +570,26 @@ function drawCanvas() {
     const cols = {};
     seg.forEach(n => (cols[r[n.id]] ||= []).push(n));
     const row = el("div", "rank-row");
-    Object.keys(cols).map(Number).sort((a, b) => a - b).forEach(k => {
+    const keys = Object.keys(cols).map(Number).sort((a, b) => a - b);
+    keys.forEach((k, i) => {
       const col = el("div", "rank-col");
+      const head = el("div", "rank-head");
+      head.appendChild(el("span", "n", `${i + 1}段目`));
+      const live = cols[k].filter(n => n.kind !== "gate");
+      const wide = live.reduce((a, n) => a + (n.kind === "fanout"
+        ? Math.max(1, n.items.filter(Boolean).length) : n.kind === "reduce" ? 0 : 1), 0);
+      if (wide > 1) head.appendChild(el("span", "sim", `同時に ${wide} 本`));
+      col.appendChild(head);
       cols[k].forEach(n => col.appendChild(nodeEl(n)));
       row.appendChild(col);
     });
     // ゲートは流れの続きなので、段を変えず右端に置く
     if (seg.gate) {
       const col = el("div", "rank-col");
+      const head = el("div", "rank-head");
+      head.appendChild(el("span", "n", `${keys.length + 1}段目`));
+      head.appendChild(el("span", "sim", "ここで人が止まる"));
+      col.appendChild(head);
       col.appendChild(nodeEl(seg.gate));
       row.appendChild(col);
     }
@@ -606,8 +640,9 @@ function drawWires() {
     svg.appendChild(p);
     const head = document.createElementNS(NS, "polygon");
     head.setAttribute("points", rightward
-      ? `${x2} ${y2},${x2 - 6} ${y2 - 3.4},${x2 - 6} ${y2 + 3.4}`
-      : `${x2} ${y2},${x2 - 3.4} ${y2 - 6},${x2 + 3.4} ${y2 - 6}`);
+      ? `${x2} ${y2},${x2 - 8} ${y2 - 4.4},${x2 - 8} ${y2 + 4.4}`
+      : `${x2} ${y2},${x2 - 4.4} ${y2 - 8},${x2 + 4.4} ${y2 - 8}`);
+    if (dashed) head.setAttribute("class", "check");
     svg.appendChild(head);
   };
 
@@ -619,12 +654,23 @@ function drawWires() {
 }
 
 function nodeEl(n) {
-  const b = el("button", "node" + (sel === n.id ? " sel" : "") + (badges(n.id) ? " bad" : ""));
+  // <button> の入れ子は作れないので div + role で組む（外すボタンを内側に置くため）
+  const b = el("div", "node" + (sel === n.id ? " sel" : "") + (badges(n.id) ? " bad" : ""));
   b.dataset.k = n.kind;
   b.dataset.nid = n.id;
+  b.setAttribute("role", "button");
+  b.tabIndex = 0;
+  b.setAttribute("aria-label", `${KIND[n.kind].ja}: ${n.title || "無題"}`);
   const top = el("div", "node-top");
   top.appendChild(el("span", "stencil", KIND[n.kind].ja));
   if (n.irreversible) top.appendChild(el("span", "stencil", "不可逆"));
+  if (sel === n.id) {
+    const x = el("button", "node-x", "×");
+    x.title = "この部品を外す";
+    x.setAttribute("aria-label", `${n.title || KIND[n.kind].ja} を外す`);
+    x.onclick = e => { e.stopPropagation(); removeNode(n.id); };
+    top.appendChild(x);
+  }
   b.appendChild(top);
   const body = el("div", "node-body");
   body.appendChild(el("div", "node-title", n.title || "（無題）"));
@@ -637,7 +683,22 @@ function nodeEl(n) {
   const k = badges(n.id);
   if (k) b.appendChild(el("span", "shu-mark", String(k)));
   b.onclick = () => { sel = n.id; render(); };
+  b.onkeydown = e => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); sel = n.id; render(); }
+    if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); removeNode(n.id); }
+  };
   return b;
+}
+
+/* 部品を外す。外した部品を指していた矢印と検証対象も一緒に外す。 */
+function removeNode(id) {
+  S.nodes = S.nodes.filter(x => x.id !== id);
+  S.nodes.forEach(x => {
+    x.deps = x.deps.filter(d => d !== id);
+    if (x.target === id) x.target = "";
+  });
+  if (sel === id) sel = null;
+  render();
 }
 
 /* ══ 右欄 ══════════════════════════════════════════════ */
@@ -664,9 +725,10 @@ function drawInspector() {
         : n.kind === "reduce" ? "整理はコードで動くので、AIへの指示は要りません。" : null));
 
     if (n.kind === "fanout")
-      sect.appendChild(area("並列で回す観点（1行1件）", n.items.join("\n"),
+      sect.appendChild(area("並列で回す対象（1行1件）", n.items.join("\n"),
         v => n.items = v.split("\n").map(s => s.trim()).filter(Boolean),
-        `同時に走ります。実行側の同時実行上限は16です。`));
+        "観点でも、ファイル名でも、顧客名でもかまいません。1行がAI1体になり、"
+        + "上の指示文の末尾にその1行が足されて同時に走ります。実行側の同時実行上限は16です。"));
 
     if (n.kind === "verify") {
       sect.appendChild(sel_("検証する相手", n.target, S.nodes.filter(x => x.id !== n.id && x.kind !== "gate")
@@ -729,11 +791,7 @@ function drawInspector() {
   p.appendChild(ds);
 
   const del = el("button", "add danger", "この部品を外す");
-  del.onclick = () => {
-    S.nodes = S.nodes.filter(x => x.id !== n.id);
-    S.nodes.forEach(x => { x.deps = x.deps.filter(d => d !== n.id); if (x.target === n.id) x.target = ""; });
-    sel = null; render();
-  };
+  del.onclick = () => removeNode(n.id);
   p.appendChild(del);
 }
 
@@ -809,11 +867,11 @@ function drawTitleBlock() {
     list.appendChild(b);
   });
   if (!findings.length && S.nodes.length)
-    list.appendChild(el("div", "finding", "指摘なし。出図できます。"));
+    list.appendChild(el("div", "finding", "指摘はありません。書き出せます。"));
 
   const btn = $("#btn-issue");
   btn.disabled = block.length > 0 || !S.nodes.length;
-  btn.textContent = block.length ? `出図不可 ${block.length}` : "出図";
+  btn.textContent = block.length ? `書き出せません（${block.length}）` : "書き出す";
 }
 
 /* ══ コード生成 ══════════════════════════════════════════ */
@@ -864,7 +922,7 @@ function generate() {
     const phases = [...new Set(seg.map(n => KIND[n.kind].phase).filter(p => p !== "整理"))];
     const L = [];
     L.push("/* GraphFlow で作成した図面です。設計の真実源は同梱の .graphflow.json です。");
-    L.push("   手で直すと次回の出図で上書きされます。図面側を直してください。 */");
+    L.push("   手で直すと次回の書き出しで上書きされます。図面側を直してください。 */");
     L.push("export const meta = {");
     L.push(`  name: ${jstr(nm)},`);
     L.push(`  description: ${jstr(S.goal || S.name)},`);
@@ -900,13 +958,13 @@ function generate() {
         const items = n.items.filter(Boolean);
         L.push(`const ${v}_items = ${JSON.stringify(items, null, 2).replace(/\n/g, "\n")}`);
         L.push(`const ${v} = (await parallel(${v}_items.map((angle, i) => () =>`);
-        L.push(`  agent(\`${promptOf(n).replace(/`/g, "\\`")}\n\n観点: \${angle}${ctx}\`, {`);
-        L.push(`    label: \`調査:\${angle}\`,`);
+        L.push(`  agent(\`${promptOf(n).replace(/`/g, "\\`")}\n\n対象: \${angle}${ctx}\`, {`);
+        L.push(`    label: \`\${angle}\`,`);
         L.push(`    phase: ${jstr(KIND[n.kind].phase)},`);
         L.push(`    schema: ${JSON.stringify(schemaOf(n))},`);
         L.push("  })")
         L.push("))).filter(Boolean)");
-        L.push(`log(\`${n.title || "調査"}: \${${v}.length}/\${${v}_items.length} 件が返りました\`)`);
+        L.push(`log(\`${n.title || "並列"}: \${${v}.length}/\${${v}_items.length} 件が返りました\`)`);
       }
       else if (n.kind === "reduce") {
         const src = dep[0] || "[]";
@@ -990,7 +1048,7 @@ function generate() {
   });
 }
 
-/* ══ 出図 ══════════════════════════════════════════════ */
+/* ══ 書き出し ══════════════════════════════════════════ */
 let tabs = [], cur = 0;
 function issue() {
   const gen = generate();

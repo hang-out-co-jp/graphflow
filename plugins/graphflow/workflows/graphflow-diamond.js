@@ -1,6 +1,6 @@
 /* GraphFlow が書き出すスクリプトの見本。
    使い方: /graphflow:graphflow-diamond に調べたいテーマを渡す。
-   自分の業務に合わせて作り直すときは `graphflow` で検図盤を開く。 */
+   自分の業務に合わせて作り直すときは `graphflow` で設計盤を開く。 */
 export const meta = {
   name: 'graphflow-diamond',
   description: 'ダイヤモンド型の基本形。角度を分けて調べ、コードで畳み、別文脈で検証し、通ったものだけで仕上げる',

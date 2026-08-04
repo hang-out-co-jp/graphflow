@@ -1,9 +1,9 @@
 ---
 name: graphflow
-description: 業務フローをGUIで設計して Claude Code の dynamic workflow スクリプトを書き出す検図盤を開きます。「ワークフローを作りたい」「グラフエンジニアリング」「業務フローをGUIで」「並列で回したい」と言われたとき、または既存の .graphflow.json を直したいときに使います。
+description: 業務フローをGUIで設計して Claude Code の dynamic workflow スクリプトを書き出す設計盤を開きます。「ワークフローを作りたい」「グラフエンジニアリング」「業務フローをGUIで」「並列で回したい」と言われたとき、または既存の .graphflow.json を直したいときに使います。
 ---
 
-# GraphFlow 検図盤
+# GraphFlow 業務フロー設計盤
 
 ブラウザのGUIで業務フローを設計し、`.claude/workflows/` に dynamic workflow スクリプトを書き出します。
 
@@ -21,7 +21,7 @@ description: 業務フローをGUIで設計して Claude Code の dynamic workfl
 2. 起動するとURLが出るので、**そのURLをユーザーに伝える**。ブラウザは自動で開きます。
    サーバーはフォアグラウンドで動き続けるため、**必ずバックグラウンドで起動する**こと。
 
-3. ユーザーが「出図」まで進んだら、GUIの `.claude/workflows/ に保存` ボタンで
+3. ユーザーが「書き出し」まで進んだら、GUIの `.claude/workflows/ に保存` ボタンで
    スクリプトと設計JSONが書き込まれます。書き込み先は `graphflow` を起動した
    ディレクトリ配下の `.claude/workflows/` に限定されています。
 
@@ -37,7 +37,7 @@ description: 業務フローをGUIで設計して Claude Code の dynamic workfl
 必要としないなら、それは偽のエッジです。同じ段に置きます。
 直列に並んでいるのは依存があるからではなく、人がその順番で書いたからであることが大半です。
 
-検図（バリデーション）が出す指摘は、GUI側が全部日本語で説明します。
+点検（バリデーション）が出す指摘は、GUI側が全部日本語で説明します。
 **指摘を回避するために設計を薄くしないこと。** 契約・検証者・アンカーが要求されるのは、
 それが無いグラフは「同じ間違いをするAIを100体並べただけ」になるからです。
 
@@ -47,7 +47,7 @@ description: 業務フローをGUIで設計して Claude Code の dynamic workfl
 - 同時実行は最大16エージェント、1回の実行全体で最大1000エージェント。
 - dynamic workflows には Claude Code v2.1.154 以降が必要です。Pro プランでは `/config` の
   Dynamic workflows を有効にしてもらう必要があります。
-- 生成されたスクリプトを手で直すと、次回の出図で上書きされます。**図面（.graphflow.json）側を直します。**
+- 生成されたスクリプトを手で直すと、次回の書き出しで上書きされます。**図面（.graphflow.json）側を直します。**
 
 ## GUIを使わない場合
 

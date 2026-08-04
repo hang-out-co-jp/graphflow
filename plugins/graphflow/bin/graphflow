@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * GraphFlow 検図盤 — ローカルサーバー
+ * GraphFlow 業務フロー設計盤 — ローカルサーバー
  *
  * web/index.html を localhost で配り、GUI からの書き出しを
  * 起動ディレクトリ配下の .claude/workflows/ にだけ書き込む。
@@ -25,7 +25,7 @@ for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   if (a === "--port" || a === "-p") port = parseInt(argv[++i], 10);
   else if (a === "--help" || a === "-h") {
-    console.log(`GraphFlow 検図盤
+    console.log(`GraphFlow 業務フロー設計盤
 
   graphflow [図面.graphflow.json] [--port 7391]
 
@@ -157,7 +157,7 @@ server.on("error", e => {
 
 server.listen(port, "127.0.0.1", () => {
   const url = `http://127.0.0.1:${port}/`;
-  console.log(`GraphFlow 検図盤: ${url}`);
+  console.log(`GraphFlow 業務フロー設計盤: ${url}`);
   console.log(`書き出し先: ${path.relative(ROOT, OUT) || OUT}`);
   console.log("止めるときは Ctrl+C");
   const cmd = process.platform === "darwin" ? "open"
