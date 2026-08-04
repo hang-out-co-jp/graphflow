@@ -42,11 +42,27 @@
 /plugin install graphflow@hangout
 ```
 
-インストール後:
+インストール後、**Claude に頼む**なら:
 
 ```
-/graphflow:graphflow          # 設計盤を開く（Claude が graphflow コマンドを起動します）
-graphflow                     # ターミナルから直接でも同じ
+/graphflow:graphflow
+```
+
+**自分のターミナルから直接**打ちたいときは、一度だけリンクを張ります。
+プラグインの `bin/` が PATH に載るのは Claude Code の Bash ツールの中だけで、
+ふだんのシェルには載らないためです。
+
+```bash
+mkdir -p ~/bin        # すでに PATH に入っていることを確認してください
+ln -sf <このリポジトリ>/plugins/graphflow/bin/graphflow        ~/bin/graphflow
+ln -sf <このリポジトリ>/plugins/graphflow/bin/graphflow-dryrun ~/bin/graphflow-dryrun
+```
+
+以後はどこからでも:
+
+```bash
+cd ~/myproject                # ここの .claude/workflows/ に保存されます
+graphflow                     # 空の図面
 graphflow foo.graphflow.json  # 既存の図面を開く
 ```
 
