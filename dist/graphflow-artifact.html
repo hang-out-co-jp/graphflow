@@ -129,6 +129,14 @@ svg.wire polygon.check{fill:var(--line)}
   font-size:10px;font-weight:600;color:var(--ai);
   border:1px solid var(--ai);padding:0 5px;white-space:nowrap;
 }
+.rank-add{
+  margin-left:auto;flex:none;padding:0 6px;line-height:15px;
+  background:transparent;border:1px dashed var(--line);color:var(--ink-3);
+  cursor:pointer;font-size:10px;white-space:nowrap;opacity:.5;transition:opacity .12s;
+}
+.rank-col:hover .rank-add,.rank-add:focus-visible{opacity:1}
+.rank-add:hover{border-color:var(--ai);border-style:solid;color:var(--ai);opacity:1}
+@media (prefers-reduced-motion:reduce){.rank-add{transition:none}}
 
 .node{
   position:relative;width:172px;background:var(--ground);
@@ -192,6 +200,7 @@ textarea.in{resize:vertical;min-height:56px;line-height:1.6}
   cursor:pointer;padding:4px 9px;font-family:var(--mono);font-size:11px;letter-spacing:.1em;
 }
 .add:hover{border-color:var(--ai);color:var(--ai)}
+#inspector>.add{display:block;width:100%;margin-top:8px;text-align:center}
 .danger{border-color:var(--shu);color:var(--shu)}
 .hint{font-size:11.5px;color:var(--ink-3);line-height:1.5;margin:-4px 0 11px}
 .deps{display:flex;flex-wrap:wrap;gap:5px}
@@ -595,6 +604,10 @@ function drawCanvas() {
       const wide = live.reduce((a, n) => a + (n.kind === "fanout"
         ? Math.max(1, n.items.filter(Boolean).length) : n.kind === "reduce" ? 0 : 1), 0);
       if (wide > 1) head.appendChild(el("span", "sim", `同時に ${wide} 本`));
+      const ins = el("button", "rank-add", "＋ この前に一段");
+      ins.title = `${i + 1}段目の手前に一段入れる`;
+      ins.onclick = () => insertStageBefore(cols[k]);
+      head.appendChild(ins);
       col.appendChild(head);
       cols[k].forEach(n => col.appendChild(nodeEl(n)));
       row.appendChild(col);
@@ -706,6 +719,41 @@ function nodeEl(n) {
   return b;
 }
 
+/* その段の手前に一段入れる。
+   新しい部品はその段が持っていた依存をそのまま引き継ぎ、
+   その段の部品は新しい部品を待つようになる（＝段がひとつ下がる）。
+   もとの依存は消さない。消すと整理ノードが素材を見失う。 */
+function insertStageBefore(group) {
+  const inherited = [...new Set(group.flatMap(n => n.deps))];
+  const n = newNode("single");
+  n.deps = inherited;
+  n.edgeChecked = inherited.length > 0;   // 引き継いだ依存は元々確認済みのもの
+  const at = Math.min(...group.map(g => S.nodes.indexOf(g)));
+  S.nodes.splice(at, 0, n);
+  group.forEach(g => {
+    if (!g.deps.includes(n.id)) {
+      g.deps.push(n.id);
+      g.edgeChecked = true;               // 人が意図して足した線なので確認済み扱い
+    }
+  });
+  sel = n.id;
+  render();
+  document.querySelector(".col.right").scrollTop = 0;
+}
+
+/* あとから種類を変える。種類ごとに要らない項目は落とす。 */
+function changeKind(n, k) {
+  if (n.kind === k) return;
+  n.kind = k;
+  n.items = k === "fanout" ? (n.items || []) : null;
+  n.countCheck = k === "reduce";
+  if (k === "verify") { if (!n.target) n.target = n.deps[0] || ""; }
+  else { n.target = ""; n.lens = ""; }
+  if (k === "gate") n.outputs = [];
+  else if (!n.outputs || !n.outputs.length) n.outputs = [{ name: "", type: "string" }];
+  render();
+}
+
 /* 部品を外す。外した部品を指していた矢印と検証対象も一緒に外す。 */
 function removeNode(id) {
   S.nodes = S.nodes.filter(x => x.id !== id);
@@ -731,6 +779,8 @@ function drawInspector() {
   sect.appendChild(el("span", "stencil", KIND[n.kind].ja));
   p.appendChild(sect);
 
+  sect.appendChild(sel_("種類", n.kind,
+    Object.keys(KIND).map(k => [k, KIND[k].ja]), v => changeKind(n, v)));
   sect.appendChild(field("名前", n.title, v => n.title = v));
   if (n.kind === "gate") {
     sect.appendChild(area("何を承認するか", n.job, v => n.job = v,
@@ -805,6 +855,10 @@ function drawInspector() {
     ds.appendChild(check("不可逆な行動を含む", n.irreversible, v => n.irreversible = v,
       "公開・送信・決済・削除・本番反映。手前に人間ゲートが要ります"));
   p.appendChild(ds);
+
+  const ins = el("button", "add", "＋ この部品の前に一段入れる");
+  ins.onclick = () => insertStageBefore([n]);
+  p.appendChild(ins);
 
   const del = el("button", "add danger", "この部品を外す");
   del.onclick = () => removeNode(n.id);
@@ -1003,12 +1057,16 @@ function generate() {
           `  )).then(a => a.filter(Boolean))`,
         ].join("\n");
       }
+      let viaVerify = false;
       const kept = depsOf(n).map(d => {
         const dn = S.nodes.find(x => "r_" + x.id === d);
-        return dn && dn.kind === "verify" ? d + "_kept" : d;
+        if (dn && dn.kind === "verify") { viaVerify = true; return d + "_kept"; }
+        return d;
       });
+      // 検証を通っていない材料を「検証を通ったものだけ」と書かない
       const ctx2 = kept.length
-        ? `\n\n使ってよい材料（検証を通ったものだけ）:\n` + kept.map(d => "${JSON.stringify(" + d + ")}").join("\n")
+        ? `\n\n${viaVerify ? "使ってよい材料（検証を通ったものだけ）" : "前段の結果"}:\n`
+          + kept.map(d => "${JSON.stringify(" + d + ")}").join("\n")
         : "";
       return [
         `agent(\`${promptOf(n).replace(/`/g, "\\`")}${ctx2}\`, {`,
