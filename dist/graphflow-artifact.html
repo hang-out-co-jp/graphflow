@@ -179,6 +179,17 @@ svg.wire polygon.check{fill:var(--line)}
 .node[data-k="gate"] .node-top{background:var(--ai-soft)}
 .node[data-k="verify"] .node-top{background:var(--shu-soft)}
 
+/* 「こう打って起動します」の一行。何を入れる場所なのかを、実物で見せる */
+.howto{margin:10px 0;padding:8px 9px;background:var(--ground);border:1px solid var(--ai)}
+.howto .stencil{display:block;margin-bottom:5px;color:var(--ai)}
+.howto-line{font-family:var(--mono);font-size:11.5px;word-break:break-all;line-height:1.7}
+.howto-line .cmd{color:var(--ink)}
+.howto-line .slot{
+  margin-left:6px;padding:1px 6px;background:var(--ai);color:#fff;
+  border-radius:2px;font-family:var(--sans);font-size:11px;
+}
+.howto small{display:block;margin-top:5px}
+
 /* 起動時に受け取るもの。部品ではないので、角を落として別物と分かるようにする */
 .in-box{
   position:relative;width:172px;background:var(--panel);
@@ -189,7 +200,11 @@ svg.wire polygon.check{fill:var(--line)}
 .in-box .node-meta{white-space:normal;line-height:1.5}
 .in-call{
   margin-top:6px;padding-top:5px;border-top:1px dashed var(--line-2);
-  font-family:var(--mono);font-size:10px;color:var(--ai);word-break:break-all;
+  font-family:var(--mono);font-size:10px;color:var(--ink-2);word-break:break-all;line-height:1.7;
+}
+.in-call .slot{
+  padding:1px 5px;background:var(--ai);color:#fff;border-radius:2px;
+  font-family:var(--sans);font-size:10px;
 }
 
 /* 朱記 = 指摘マーク。図面上で赤いのは指摘だけ */
@@ -442,7 +457,7 @@ function blank() {
     // 繰り返しは部品ではなく「帯」。どの段からどの段までを、何周まで回すか。
     loop: { from: "", to: "", max: 5, dry: 2 },
     // 起動時に外から受け取るもの。宣言すると 1段目の仕事に自動で渡る。
-    input: { name: "", desc: "" },
+    input: { name: "", desc: "", sample: "" },
   };
 }
 
@@ -467,6 +482,7 @@ function normalize(d) {
     input: {
       name: typeof (d.input && d.input.name) === "string" ? d.input.name : "",
       desc: typeof (d.input && d.input.desc) === "string" ? d.input.desc : "",
+      sample: typeof (d.input && d.input.sample) === "string" ? d.input.sample : "",
     },
     nodes: [],
   };
@@ -872,7 +888,11 @@ function drawCanvas() {
       const body = el("div", "node-body");
       body.appendChild(el("div", "node-title", S.input.name));
       if (S.input.desc.trim()) body.appendChild(el("div", "node-meta", S.input.desc));
-      body.appendChild(el("div", "in-call", `/${S.name || "図面名"} …`));
+      const call = el("div", "in-call");
+      call.appendChild(el("span", null, `/${S.name || "図面名"} `));
+      call.appendChild(el("span", "slot",
+        S.input.sample.trim() || `ここに${S.input.name}を書く`));
+      body.appendChild(call);
       box.appendChild(body);
       col.appendChild(box);
       row.appendChild(col);
@@ -1304,19 +1324,33 @@ function drawInputControls() {
     return;
   }
   const l2 = el("label", "f");
-  l2.appendChild(el("span", "stencil", "何を渡すのか（渡す人への説明）"));
+  l2.appendChild(el("span", "stencil", "渡す人への説明"));
   const t = el("textarea", "in");
   t.value = S.input.desc || "";
-  t.placeholder = "例: 書きたい記事のテーマ。1行で。";
+  t.placeholder = "例: 起動時に、書きたい記事のテーマを1行で渡します。";
   t.oninput = () => { S.input.desc = t.value; scheduleRender(); };
   l2.appendChild(t);
   w.appendChild(l2);
-  const 例 = el("p", "hint");
-  例.appendChild(document.createTextNode("呼び方: "));
-  例.appendChild(el("code", null, `/${S.name || "図面名"} ${S.input.name}のなかみ`));
-  w.appendChild(例);
+
+  const l3 = el("label", "f");
+  l3.appendChild(el("span", "stencil", "例（そのまま打てる1行）"));
+  l3.appendChild(inp(S.input.sample, "例: 睡眠の質を上げる方法",
+    v => S.input.sample = v));
+  w.appendChild(l3);
+
+  // 「…」では何を入れるのか伝わらない。そのまま打てる行を見せる。
+  const 使い方 = el("div", "howto");
+  使い方.appendChild(el("span", "stencil", "こう打って起動します"));
+  const 行 = el("div", "howto-line");
+  行.appendChild(el("span", "cmd", "/" + (S.name || "図面名")));
+  行.appendChild(el("span", "slot", S.input.sample.trim() || `ここに${S.input.name}を書く`));
+  使い方.appendChild(行);
+  if (!S.input.sample.trim())
+    使い方.appendChild(el("small", "hint", "↑ 例を書くと、ここに実物が出ます"));
+  w.appendChild(使い方);
+
   const off = el("button", "add danger", "受け取らないようにする");
-  off.onclick = () => { S.input = { name: "", desc: "" }; render(); };
+  off.onclick = () => { S.input = { name: "", desc: "", sample: "" }; render(); };
   w.appendChild(off);
 }
 
@@ -1479,12 +1513,13 @@ function generate() {
     /* 1枚目だけが、外から起動時の入力を受け取る。
        実行中に人へ聞けないので、聞きたいことはここで受け取るしかない。 */
     if (i === 0 && S.input.name.trim()) {
+      const 例 = S.input.sample.trim() || `ここに${S.input.name}を書く`;
       L.push(`// 起動時に受け取るもの: ${lit(S.input.name)}`);
       if (S.input.desc.trim()) L.push(`//   ${lit(S.input.desc)}`);
-      L.push(`// 呼び方: /${nm} ${lit(S.input.name)}のなかみ`);
+      L.push(`// こう打って起動します:  /${nm} ${lit(例)}`);
       L.push("const 入力 = args ?? null");
       L.push(`if (入力 == null) {`);
-      L.push(`  log("⚠ ${lit(S.input.name)} が渡されていません。/${nm} に続けて渡してください。")`);
+      L.push(`  log("⚠ ${lit(S.input.name)} が渡されていません。こう打ってください: /${nm} ${lit(例)}")`);
       L.push(`  return { result: null, status: "INCOMPLETE", 足りないもの: ${jstr(S.input.name)} }`);
       L.push("}");
       L.push("");
@@ -1795,7 +1830,8 @@ function drawDialog() {
   $("#dlg-msg").textContent = "";
   const split = tabs.length > 2 ? `人間ゲートで ${tabs.length - 1} 枚に割れています。` : "";
   const 呼び方 = S.input.name.trim()
-    ? `呼び方: /${S.name}${tabs.length > 2 ? "-1" : ""} ${S.input.name}のなかみ`
+    ? `こう打って起動します:  /${S.name}${tabs.length > 2 ? "-1" : ""} `
+      + (S.input.sample.trim() || `ここに${S.input.name}を書く`)
     : (window.__GRAPHFLOW_LOCAL__ ? "" : ".js を .claude/workflows/ に置くと /図面名 で起動できます");
   $("#dlg-path").textContent = split + 呼び方;
   $("#dlg-save").hidden = !window.__GRAPHFLOW_LOCAL__;
@@ -1803,9 +1839,10 @@ function drawDialog() {
 
 /* ══ ひな形 ══════════════════════════════════════════════ */
 const TEMPLATES = {
-  "競合調査": () => build("competitor-scan", "経営者が商品設計と販売戦略を決められる水準の競合調査をまとめる",
+  "競合調査": () => Object.assign(
+    build("competitor-scan", "渡された商品・サービスについて、経営者が商品設計と販売戦略を決められる水準の競合調査をまとめる",
     ["公式サイトの料金ページ（一次情報）", "実際に問い合わせて得た回答"], { max: 12, conc: 5 }, [
-      ["fanout", "角度を分けて調べる", "指定された観点で日本国内の競合サービスを調べます。すべての発見に出典URL・公開日・確認日・確信度を付けます。出典のない主張は書きません。",
+      ["fanout", "角度を分けて調べる", "渡された商品・サービスについて、指定された観点で日本国内の競合を調べます。すべての発見に出典URL・公開日・確認日・確信度を付けます。出典のない主張は書きません。",
         ["競合サービスと料金", "法人担当者の悩み", "利用者の不満", "2026年のトレンド", "差別化の余地"],
         [["finding", "string"], ["source_url", "string"], ["published_at", "string"], ["confidence", "number"]],
         "公式情報を確認できない場合は、推測せず status を unverified にする"],
@@ -1814,6 +1851,12 @@ const TEMPLATES = {
       ["synthesize", "調査報告書にまとめる", "検証を通った情報だけを使い、市場機会・顧客課題・競合の弱点・推奨商品・販売戦略をまとめます。",
         null, [["report", "string"], ["opportunities", "array"]], "材料が足りない項目は「材料不足」と明記する"],
     ]),
+    { input: {
+      name: "調べる商品・サービス",
+      desc: "起動時に、競合を調べたい自社の商品やサービスを渡します。",
+      sample: "オンライン英会話スクール",
+    } }),
+
   // 起動時にテーマを受け取る例。同じ figure を何度でも別テーマで呼べる。
   "記事制作": () => Object.assign(
     build("article-build", "渡されたテーマで、出典の付いた1万字の記事を、密度を落とさずに仕上げる",
@@ -1829,7 +1872,11 @@ const TEMPLATES = {
         null, [["body", "string"], ["word_count", "number"]], "材料が足りない節は書かず、不足を明記する"],
       ["gate", "公開してよいか人が決める", "公開は不可逆です。ここで一度止まります。"],
     ]),
-    { input: { name: "テーマ", desc: "書きたい記事のテーマ。1行で。例: 遠征グルメでフォロワーを増やす方法" } }),
+    { input: {
+      name: "テーマ",
+      desc: "起動時に、書きたい記事のテーマを1行で渡します。",
+      sample: "睡眠の質を上げる方法",
+    } }),
 
   // 1段目に「並列」を3本置く例。調べる対象が違うものは、別々の並列にする。
   "新商品の立ち上げ": () => buildGraph("product-launch",
@@ -1979,9 +2026,10 @@ const TEMPLATES = {
     return s;
   },
 
-  "営業提案": () => build("sales-proposal", "商談で使える提案書一式を、推測と事実を混ぜずに作る",
+  "営業提案": () => Object.assign(
+    build("sales-proposal", "渡された顧客に向けて、商談で使える提案書一式を、推測と事実を混ぜずに作る",
     ["顧客が実際に発言・提供した情報", "公開されている一次情報"], { max: 10, conc: 5 }, [
-      ["fanout", "顧客まわりを調べる", "指定された観点で顧客企業を調べます。顧客が実際に提供した情報と、こちらが推測した情報を必ず分けて書きます。",
+      ["fanout", "顧客まわりを調べる", "渡された顧客企業を、指定された観点で調べます。顧客が実際に提供した情報と、こちらが推測した情報を必ず分けて書きます。",
         ["事業内容と直近の動き", "業界の課題", "競合の動向", "顧客の過去の発言", "導入の障壁"],
         [["finding", "string"], ["is_from_customer", "boolean"], ["source_url", "string"]],
         "出典を確認できない場合は is_from_customer を false にし status を unverified にする"],
@@ -1991,6 +2039,11 @@ const TEMPLATES = {
         null, [["proposal", "string"], ["questions", "array"]], "顧客未確認の前提は必ず「未確認」と明記する"],
       ["gate", "顧客に送ってよいか人が決める", "外部送信は不可逆です。ここで一度止まります。"],
     ]),
+    { input: {
+      name: "提案する相手",
+      desc: "起動時に、提案したい顧客の会社名を渡します。",
+      sample: "株式会社サンプル商事",
+    } }),
 };
 
 /* 依存を添字で明示する版。分岐や合流があるひな形はこちらで書く。 */
