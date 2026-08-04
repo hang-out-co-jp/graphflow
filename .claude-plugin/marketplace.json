@@ -10,5 +10,6 @@
       "source": "./plugins/graphflow",
       "description": "業務フローをGUIで設計し、Claude Code の dynamic workflow スクリプトを書き出します。契約・検証者・アンカー・人間ゲート・上限が揃うまで書き出しをブロックする「検図」つき。"
     }
-  ]
+  ],
+  "description": "hang out Inc. が作っているClaude Code向けプラグイン。"
 }
