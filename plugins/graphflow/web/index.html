@@ -961,8 +961,17 @@ function check(label, val, on, sub) {
 }
 function note(t) { return el("p", "hint", t); }
 
+/* 入力中は、いま触っている欄を含む場所を作り直さない。
+   render() は右パネルとヘッダの入力欄ごと作り直すので、
+   タイプするたびに入力欄が消えてフォーカスが外れていた。
+   文字入力で更新が要るのは図面と表題欄だけなので、そこだけ描き直す。 */
 let rt = null;
-function scheduleRender() { clearTimeout(rt); rt = setTimeout(render, 260); }
+function scheduleRender() { clearTimeout(rt); rt = setTimeout(liveUpdate, 180); }
+function liveUpdate() {
+  findings = inspect();
+  drawCanvas();
+  drawTitleBlock();
+}
 
 function drawAnchors() {
   const w = $("#anchors"); w.textContent = "";
