@@ -100,6 +100,7 @@ main{flex:1;display:grid;grid-template-columns:190px minmax(0,1fr) 326px;min-hei
 .part b{display:block;font-size:13px;font-weight:600}
 .part i{display:block;font-style:normal;font-size:11px;color:var(--ink-3);line-height:1.45}
 .part[data-k="gate"]{border-left:3px solid var(--ai)}
+.part[data-k="input"]{border-left:3px dashed var(--ai);margin-top:9px}
 
 /* ── 図面（キャンバス）───────────────────────────── */
 .canvas-wrap{position:relative;overflow:auto;height:100%;background:var(--sunk)}
@@ -201,6 +202,9 @@ svg.wire polygon.check{fill:var(--line)}
   position:relative;width:172px;background:var(--panel);
   border:1px dashed var(--ai);border-left-width:3px;border-left-style:solid;
 }
+.in-box.sel{border-style:solid;box-shadow:0 0 0 2px var(--ai-soft)}
+.in-box:hover{border-color:var(--ink-2)}
+.in-box{cursor:pointer}
 .in-box .node-top{background:transparent;border-bottom:1px dashed var(--line-2)}
 .in-box .node-top .stencil{color:var(--ai)}
 .in-box .node-meta{white-space:normal;line-height:1.5}
@@ -361,13 +365,7 @@ pre{
       <button class="part" data-k="verify"><b>検証</b><i>別文脈で「間違い」を探す</i></button>
       <button class="part" data-k="synthesize"><b>統合</b><i>検証を通ったものだけで仕上げる</i></button>
       <button class="part" data-k="gate"><b>人間ゲート</b><i>ここで図面が2枚に割れる</i></button>
-    </div>
-
-    <div class="sect">
-      <span class="stencil">起動時に受け取るもの</span>
-      <p class="hint">図面を呼ぶときに外から渡す値です。<b>1段目の仕事に自動で渡ります。</b><br>
-        実行中に人へ聞くことはできないので、聞きたいことはここで受け取ります。</p>
-      <div id="inputctl"></div>
+      <button class="part" data-k="input"><b>起動時の入力</b><i>呼ぶときに外から渡す値。1段目に自動で渡る</i></button>
     </div>
 
     <div class="sect">
@@ -834,7 +832,6 @@ function render() {
   drawInspector();
   drawTitleBlock();
   drawAnchors();
-  drawInputControls();
   drawLoopControls();
   $("#f-name").value = S.name;
   $("#f-goal").value = S.goal;
@@ -857,9 +854,56 @@ function undo() {
 
 function badges(id) { return findings.filter(f => f.node && f.node.id === id && !f.warn).length; }
 
+/* 起動時の入力の箱。仕事の部品ではないので、別の見た目にする。 */
+function inputBox() {
+  const col = el("div", "rank-col");
+  const head = el("div", "rank-head");
+  head.appendChild(el("span", "n", "起動時"));
+  col.appendChild(head);
+  const box = el("div", "in-box" + (sel === "__input__" ? " sel" : ""));
+  box.dataset.nid = "__input__";
+  box.setAttribute("role", "button");
+  box.tabIndex = 0;
+  box.setAttribute("aria-label", `起動時の入力: ${S.input.name}`);
+  box.onclick = () => { sel = "__input__"; render(); };
+  box.onkeydown = e => {
+    if (e.target !== box) return;
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); sel = "__input__"; render(); }
+  };
+  const top = el("div", "node-top");
+  top.appendChild(el("span", "stencil", "入力"));
+  if (sel === "__input__") {
+    const x = el("button", "node-x", "×");
+    x.title = "受け取らないようにする";
+    x.setAttribute("aria-label", "起動時の入力をやめる");
+    x.onclick = e => {
+      e.stopPropagation();
+      S.input = { name: "", desc: "", sample: "" }; sel = null; render();
+    };
+    top.appendChild(x);
+  }
+  box.appendChild(top);
+  const body = el("div", "node-body");
+  body.appendChild(el("div", "node-title", S.input.name));
+  if (S.input.desc.trim()) body.appendChild(el("div", "node-meta", S.input.desc));
+  const call = el("div", "in-call");
+  call.appendChild(el("span", null, `/${S.name || "図面名"} `));
+  call.appendChild(el("span", "slot", S.input.sample.trim() || `ここに${S.input.name}を書く`));
+  body.appendChild(call);
+  box.appendChild(body);
+  col.appendChild(box);
+  return col;
+}
+
 function drawCanvas() {
   const c = $("#canvas"); c.textContent = "";
   if (!S.nodes.length) {
+    // 仕事はまだ無くても、入力を置いたなら図面に出す（置いたのに見えないのは事故）
+    if (S.input.name.trim()) {
+      const row = el("div", "rank-row");
+      row.appendChild(inputBox());
+      c.appendChild(row);
+    }
     const e = el("div", "empty-canvas");
     e.innerHTML = "左の<b>部品箱</b>から部品を置くと、依存の深さで図面が自動で起きます。<br><br>"
       + "描く順番ではなく<b>依存だけ</b>が段を決めます。前の結果を必要としない仕事は、勝手に同じ段に並びます。"
@@ -882,29 +926,8 @@ function drawCanvas() {
     const keys = Object.keys(cols).map(Number).sort((a, b) => a - b);
 
     /* 起動時に受け取るものを、図面の左端に置く。
-       何を受け取る figure なのかは、左パネルを開かなくても図で分かるべき。 */
-    if (si === 0 && S.input.name.trim()) {
-      const col = el("div", "rank-col");
-      const head = el("div", "rank-head");
-      head.appendChild(el("span", "n", "起動時"));
-      col.appendChild(head);
-      const box = el("div", "in-box");
-      box.dataset.nid = "__input__";
-      const top = el("div", "node-top");
-      top.appendChild(el("span", "stencil", "入力"));
-      box.appendChild(top);
-      const body = el("div", "node-body");
-      body.appendChild(el("div", "node-title", S.input.name));
-      if (S.input.desc.trim()) body.appendChild(el("div", "node-meta", S.input.desc));
-      const call = el("div", "in-call");
-      call.appendChild(el("span", null, `/${S.name || "図面名"} `));
-      call.appendChild(el("span", "slot",
-        S.input.sample.trim() || `ここに${S.input.name}を書く`));
-      body.appendChild(call);
-      box.appendChild(body);
-      col.appendChild(box);
-      row.appendChild(col);
-    }
+       何を受け取る figure なのかは、右パネルを開かなくても図で分かるべき。 */
+    if (si === 0 && S.input.name.trim()) row.appendChild(inputBox());
 
     const LR = loopRange();
     let loopBox = null;                    // 繰り返しの帯
@@ -1138,6 +1161,13 @@ function removeNode(id) {
 /* ══ 右欄 ══════════════════════════════════════════════ */
 function drawInspector() {
   const p = $("#inspector"); p.textContent = "";
+  // 起動時の入力は部品ではないが、選んだら同じ場所で中身を決められるようにする
+  if (sel === "__input__") {
+    const s = el("div", "sect");
+    drawInputControls(s);
+    p.appendChild(s);
+    return;
+  }
   const n = S.nodes.find(x => x.id === sel);
   if (!n) {
     const s = el("div", "sect");
@@ -1321,14 +1351,17 @@ function liveUpdate() {
 
 /* 起動時に外から受け取るもの。
    実行中に人へ聞くことはできないので、聞きたいことは全部ここで受け取る。 */
-function drawInputControls() {
-  const w = $("#inputctl"); w.textContent = "";
+function drawInputControls(w) {
+  w.appendChild(el("span", "stencil", "起動時の入力"));
+  w.appendChild(el("p", "hint",
+    "図面を呼ぶときに外から渡す値です。1段目の仕事に自動で渡ります。"
+    + "実行中に人へ聞くことはできないので、聞きたいことはここで受け取ります。"));
   const l1 = el("label", "f");
   l1.appendChild(el("span", "stencil", "呼び名"));
   l1.appendChild(inp(S.input.name, "例: テーマ / 対象ファイル / 顧客名", v => S.input.name = v));
   w.appendChild(l1);
   if (!S.input.name.trim()) {
-    w.appendChild(el("p", "hint", "（何も受け取りません。毎回おなじ内容で走ります）"));
+    w.appendChild(el("p", "hint", "呼び名を入れると、渡し方の説明と例を書けます。"));
     return;
   }
   const l2 = el("label", "f");
@@ -2100,6 +2133,13 @@ function build(name, goal, anchors, caps, rows) {
 
 /* ══ 配線 ══════════════════════════════════════════════ */
 document.querySelectorAll(".part").forEach(b => b.onclick = () => {
+  // 起動時の入力は部品ではなく図面に1つだけ。置き場所は部品箱に揃える。
+  if (b.dataset.k === "input") {
+    if (!S.input.name.trim()) S.input = { name: "入力", desc: "", sample: "" };
+    sel = "__input__"; render();
+    document.querySelector(".col.right").scrollTop = 0;
+    return;
+  }
   const n = newNode(b.dataset.k);
   S.nodes.push(n); sel = n.id; render();
   document.querySelector(".col.right").scrollTop = 0;
@@ -2190,7 +2230,7 @@ $("#dlg-save").onclick = async () => {
 /* 図面の余白を押したら選択を外す。「選ぶ」があって「やめる」が無いと、
    ×が出っぱなしのまま別の場所を触ることになる。 */
 document.querySelector(".canvas-wrap").addEventListener("click", e => {
-  if (!e.target.closest(".node") && sel !== null) { sel = null; render(); }
+  if (!e.target.closest(".node") && !e.target.closest(".in-box") && sel !== null) { sel = null; render(); }
 });
 
 /* 1手だけ戻す。削除は取り消せないと押し間違いがそのまま損失になる。 */
