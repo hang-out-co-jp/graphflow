@@ -463,6 +463,8 @@ function normalize(d) {
       countCheck: n.kind === "reduce" ? n.countCheck !== false : false,
       target: typeof n.target === "string" ? n.target : "",
       lens: String(n.lens ?? ""),
+      writesFiles: !!n.writesFiles,
+      fileChecked: !!n.fileChecked,
     });
   });
   // 存在しない相手を指す線と検証対象は捨てる（読んだ瞬間に落ちないため）
@@ -520,6 +522,8 @@ function newNode(kind) {
     countCheck: kind === "reduce",
     target: kind === "verify" ? (leaves.length === 1 ? leaves[0].id : "") : "",
     lens: "",
+    writesFiles: false,   // ファイルを書き換えるか
+    fileChecked: false,   // 書き換えるかどうかを人が確かめたか
   };
 }
 
@@ -563,7 +567,8 @@ function inspect() {
     if (callsAI && !n.fail.trim()) push("K-7", `「${at}」に失敗時の動作がありません。AIが推測で埋めます`, n);
 
     if (n.deps.length && !n.edgeChecked)
-      push("K-8", `「${at}」の依存が偽のエッジか未検査です`, n);
+      push("K-8", `「${at}」の依存が偽のエッジか未検査です。`
+        + `本当にその結果が要るなら「偽のエッジを検査した」にチェック、要らないなら依存を外してください`, n);
     if (n.kind === "fanout") {
       const c = n.items.filter(Boolean).length;
       if (!c) push("K-9", `「${at}」に並列で回す対象がありません`, n);
@@ -585,9 +590,9 @@ function inspect() {
   }
 
   if (work.length && !S.nodes.some(n => n.kind === "verify"))
-    push("K-15", "検証ノードがありません。作業者だけを100体並べても誤りは100件に増えるだけです", null);
+    push("K-15", "検証ノードがありません。作業者だけを100体並べても誤りは100件に増えるだけです。部品箱から「検証」を置き、誰を検証するかを指定してください", null);
   if (!S.anchors.filter(a => a.trim()).length)
-    push("K-16", "アンカーが未宣言です。何をもって正しいとするかが決まっていません", null);
+    push("K-16", "アンカーが未宣言です。何をもって正しいとするかが決まっていません。左の「アンカー」に、AIが言い訳できない現実を1つ以上書いてください（例: テストが通った / 入金された）", null);
   if (!S.caps.max) push("K-17", "総エージェント数の上限が未設定です", null);
   if (S.caps.max > 1000) push("K-18", "総エージェント数が実行側の上限1000を超えています", null);
   if (S.caps.conc > 16) push("K-19", "並列数が実行側の同時実行上限16を超えています（しかも16は上限で、実機ではコア数−2まで落ちます）", null);
@@ -603,6 +608,26 @@ function inspect() {
       + `上限を上げるか、並列の対象を減らしてください`, null, true);
 
   if (cyclic()) push("K-21", "依存が循環しています。順番が決まりません", null);
+
+  /* 🔴 同じ段で2本以上が同時に走るとき、その中にファイルを書く仕事があると
+     互いの変更を上書きする。記事の言う「独立しているように見えて独立していない」。
+     機械には「この仕事がファイルを書くか」は分からないので、人に確かめさせる。 */
+  if (!cyclic()) {
+    const rk = ranks(), 同時 = {};
+    S.nodes.forEach(n => {
+      if (n.kind === "gate" || n.kind === "reduce") return;
+      const w = n.kind === "fanout" ? Math.max(1, n.items.filter(Boolean).length) : 1;
+      同時[rk[n.id]] = (同時[rk[n.id]] || 0) + w;
+    });
+    S.nodes.forEach(n => {
+      if (n.kind === "gate" || n.kind === "reduce") return;
+      if ((同時[rk[n.id]] || 0) < 2) return;          // 1本しか走らない段は関係ない
+      if (!n.fileChecked)
+        push("K-33", `「${n.title || KIND[n.kind].ja}」は同時に走る段にあります。`
+          + `ファイルを書き換えるかどうかを確かめてください`
+          + `（並列でファイルを書くと、互いの変更を上書きします）`, n);
+    });
+  }
 
   // ゲートは図面の切れ目であって仕事ではない。中身が無い図面は書き出せない。
   segments().forEach((sg, i) => {
@@ -1056,6 +1081,14 @@ function drawInspector() {
   if (n.deps.length)
     ds.appendChild(check("偽のエッジを検査した", n.edgeChecked, v => n.edgeChecked = v,
       "残した矢印は、直前の結果が本当に要るものだけ"));
+  if (n.kind !== "gate" && n.kind !== "reduce") {
+    ds.appendChild(check("ファイルを書き換えるか確かめた", n.fileChecked, v => n.fileChecked = v,
+      "同じ段で2本以上が同時に走るとき、機械には判断できないので人が答えます"));
+    if (n.fileChecked)
+      ds.appendChild(check("ファイルを書き換える", n.writesFiles, v => n.writesFiles = v,
+        "ONにすると、この仕事だけ別の作業コピー（worktree）で動かします。"
+        + "他の仕事と同じファイルを奪い合わなくなります"));
+  }
   if (n.kind !== "gate")
     ds.appendChild(check("不可逆な行動を含む", n.irreversible, v => n.irreversible = v,
       "公開・送信・決済・削除・本番反映。手前に人間ゲートが要ります"));
@@ -1353,6 +1386,7 @@ function generate() {
           `    spawn(\`${promptOf(n)}\n\n対象: \${対象}${ctxOf(n)}\`, {`,
           `      label: \`\${対象}\`,`,
           `      phase: ${jstr(KIND[n.kind].phase)},`,
+          ...(n.writesFiles ? [`      isolation: "worktree",   // 同じファイルを奪い合わないよう、別の作業コピーで動かす`] : []),
           `      schema: ${JSON.stringify(schemaOf(n))},`,
           `    })`,
           `  )).then(a => a.filter(Boolean))`,
@@ -1396,6 +1430,7 @@ function generate() {
         `spawn(\`${promptOf(n)}${ctx2}\`, {`,
         `    label: ${jstr(n.title || KIND[n.kind].ja)},`,
         `    phase: ${jstr(KIND[n.kind].phase)},`,
+        ...(n.writesFiles ? [`    isolation: "worktree",   // 同じファイルを奪い合わないよう、別の作業コピーで動かす`] : []),
         `    schema: ${JSON.stringify(schemaOf(n))},`,
         `  })`,
       ].join("\n");
@@ -1690,14 +1725,19 @@ const TEMPLATES = {
         { k: "verify", t: "実装できるか確かめる", d: [5], lens: "実装の穴・依存・壊れる既存機能",
           o: [["verdict", "string"]], f: "判断できないものは unverified にする" },
         { k: "synthesize", t: "作るものを決める", d: [6],
-          j: "検証を通った候補だけで、今回作るものと作らないものを分けます。作らない理由も残します。",
-          o: [["build", "array"], ["skip", "array"], ["reason", "string"]],
-          f: "決められない場合は決めず、何が足りないかを書く" },
+          j: "検証を通った候補だけで、今回作るものと作らないものを分けます。作らない理由も残します。\n\n"
+             + "🔴 前の図面から渡された指摘は、**1件残らず** build か skip のどちらかに入れてください。"
+             + "どちらにも入っていない指摘があってはいけません。"
+             + "最後に、渡された件数と (build + skip) の件数が一致することを自分で数えて確かめ、"
+             + "accounted に「渡された件数 / 仕分けた件数」を書きます。",
+          o: [["build", "array"], ["skip", "array"], ["accounted", "string"], ["reason", "string"]],
+          f: "決められない場合は決めず、何が足りないかを書く。"
+             + "件数が合わない場合は、合わないことを accounted に明記して返す" },
         { k: "gate", t: "実装してよいか人が決める", d: [7],
           j: "何を作るかを人が承認します。ファイルを書き換える前の、最後の止まりどころです。" },
 
         // ── 図面3 実装 ──────────────────────────
-        { k: "single", t: "決まったものを実装する", d: [8],
+        { k: "single", t: "決まったものを実装する", d: [8], writes: true,
           j: "承認された機能を実装します。⚠ 同じファイルを触るので、この工程は直列です（並列にすると互いの変更を上書きします）。既存の動きを壊していないか、変更のたびに確かめます。",
           o: [["changes", "array"], ["regressions", "string"]],
           f: "実装できないものは無理に書かず、なぜできないかを残す" },
@@ -1719,7 +1759,7 @@ const TEMPLATES = {
           j: "テストを、実際にブラウザを操作して実施します。⚠ ブラウザは1つしかないので直列に行います。",
           o: [["results", "array"], ["failed", "number"]],
           f: "操作そのものができない場合は、成功扱いにせず失敗として記録する" },
-        { k: "single", t: "落ちたものを直す", d: [14],
+        { k: "single", t: "落ちたものを直す", d: [14], writes: true,
           j: "失敗したテストの原因を探して直します。仕様を変えないと直らないものは直さず、印を付けて残します。",
           o: [["fixed", "array"]], f: "原因を特定できないものは直さず、理由を残す" },
         { k: "verify", t: "直ったか判定する", d: [15], lens: "再現手順を実際に踏んで直っているか",
@@ -1747,7 +1787,7 @@ const TEMPLATES = {
           j: "テスト一覧を、実際にブラウザを操作して実施します。⚠ ブラウザは1つしかないので直列に行います（並列にすると互いのブラウザを奪い合います）。",
           o: [["results", "array"], ["failed", "number"]],
           f: "操作そのものができない場合は、成功扱いにせず失敗として記録する" },
-        { k: "single", t: "落ちたものを直す", d: [3],
+        { k: "single", t: "落ちたものを直す", d: [3], writes: true,
           j: "失敗したテストの原因を探して直します。仕様を変えないと直らないものは直さず、印を付けて残します。",
           o: [["fixed", "array"]], f: "原因を特定できないものは直さず、理由を残す" },
         { k: "verify", t: "直ったか判定する", d: [4], lens: "再現手順を実際に踏んで直っているか",
@@ -1784,6 +1824,8 @@ function buildGraph(name, goal, anchors, caps, rows) {
     n.title = r.t; n.job = r.j || "";
     n.deps = (r.d || []).map(i => made[i].id);
     n.edgeChecked = true;
+    n.fileChecked = true;
+    n.writesFiles = !!r.writes;
     if (r.items) n.items = r.items;
     if (r.o) n.outputs = r.o.map(([nm, ty]) => ({ name: nm, type: ty }));
     if (r.f) n.fail = r.f;
@@ -1802,6 +1844,7 @@ function build(name, goal, anchors, caps, rows) {
     const n = newNode(kind);
     n.title = title; n.job = job || ""; n.deps = prev ? [prev.id] : [];
     n.edgeChecked = true;
+    n.fileChecked = true;
     if (items) n.items = items;
     if (outs) n.outputs = outs.map(([nm, ty]) => ({ name: nm, type: ty }));
     if (fail) n.fail = fail;
