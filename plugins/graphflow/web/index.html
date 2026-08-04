@@ -257,6 +257,15 @@ textarea.in{resize:vertical;min-height:56px;line-height:1.6}
 #inspector>.add.pick{text-align:left;padding:5px 9px}
 .danger{border-color:var(--shu);color:var(--shu)}
 .hint{font-size:11.5px;color:var(--ink-3);line-height:1.5;margin:-4px 0 11px}
+/* 何を書けばいいか迷う欄に、押すだけで入る見本を並べる */
+.samples{margin:-4px 0 11px}
+.samples .stencil{display:block;margin-bottom:5px}
+.sample-btn{
+  display:block;width:100%;text-align:left;margin-bottom:4px;padding:5px 8px;
+  background:transparent;border:1px dashed var(--line-2);color:var(--ink-2);
+  cursor:pointer;font-size:11.5px;line-height:1.45;
+}
+.sample-btn:hover{border-style:solid;border-color:var(--ai);color:var(--ink)}
 .deps{display:flex;flex-wrap:wrap;gap:5px}
 .dep{
   font-family:var(--mono);font-size:11px;padding:2px 7px;cursor:pointer;
@@ -278,7 +287,11 @@ textarea.in{resize:vertical;min-height:56px;line-height:1.6}
 .tb b{font-family:var(--mono);font-size:16px;font-weight:600;letter-spacing:.02em}
 .tb.flag b{color:var(--shu)}
 .tb.pass b{color:var(--ok)}
-.tb-list{overflow-y:auto;max-height:74px;padding:6px 14px;border-right:1px solid var(--line-2)}
+.tb-list{overflow-y:auto;max-height:110px;padding:6px 14px;border-right:1px solid var(--line-2)}
+/* 指摘から飛んだ部品を一瞬光らせる。目で探させないため */
+@keyframes flash{0%,100%{box-shadow:none}30%,70%{box-shadow:0 0 0 4px var(--shu)}}
+.node.flash{animation:flash .9s ease-in-out}
+@media (prefers-reduced-motion:reduce){.node.flash{animation:none;box-shadow:0 0 0 4px var(--shu)}}
 .finding{
   display:flex;gap:8px;align-items:baseline;font-size:11.5px;line-height:1.5;
   padding:1px 0;cursor:pointer;background:none;border:0;text-align:left;width:100%;
@@ -699,6 +712,19 @@ function inspect() {
       const LR = loopRange();
       if (!loopJudge())
         push("K-25", "繰り返しの中に検証がありません。何をもって合格とするか決まらず、止まりません", null);
+      /* 🔴 繰り返しの中の検証が、帯の外を見ていたら空回りする。
+         毎周おなじものを読むので、直しても判定が変わらない。
+         止まりはするが「直ったか」を一度も見ていない状態になる。 */
+      const j = loopJudge();
+      const rk2 = ranks();
+      if (j && j.target && byId[j.target]) {
+        const tr = rk2[j.target];
+        if (tr < LR.a || tr > LR.b)
+          push("K-35", `繰り返しの中の「${j.title || "検証"}」が、繰り返しの外にある`
+            + `「${byId[j.target].title || "?"}」を検証しています。`
+            + `毎周おなじものを読むので、直しても判定が変わりません。`
+            + `検証する相手を、繰り返しの中の仕事（直した結果が出るもの）に変えてください`, j);
+      }
       if (!S.loop.max) push("K-26", "繰り返しの最大周回数が未設定です。止まらなくなります", null);
       if (!S.loop.dry) push("K-27", "空回りの判定回数が未設定です。指摘が出なくなっても回り続けます", null);
       // 実行中に人の承認は挟めない＝ゲートをまたぐ繰り返しは動かせない
@@ -1238,8 +1264,32 @@ function drawInspector() {
     const add = el("button", "add", "＋ 項目");
     add.onclick = () => { n.outputs.push({ name: "", type: "string" }); render(); };
     cs.appendChild(add);
-    cs.appendChild(area("失敗したとき", n.fail, v => n.fail = v,
-      "例: 公式情報を確認できない場合は、推測せず status を unverified にする"));
+    cs.appendChild(area("できなかったときどうするか", n.fail, v => n.fail = v,
+      "AIは「できません」と言うより、それらしい答えを作る方に流れます。"
+      + "だから「できなかったらこうしろ」を先に決めておきます。"));
+    /* 何を書けばいいか迷う欄なので、種類ごとに使える書き出しを並べる。
+       押すとそのまま入る（考えるより選ぶ方が早い）。 */
+    const 見本 = {
+      fanout: ["出典を確認できないものは書かず、なぜ確認できなかったかを残す",
+               "対象そのものが見つからない場合は「見つからない」と返す"],
+      single: ["できない場合は無理に進めず、何が足りないかを書く",
+               "手順の途中で止まったら、どこまでできたかを残す"],
+      verify: ["確認できないものは、合格でも不合格でもなく unverified にする",
+               "判断がつかないものは、つかない理由を書く"],
+      synthesize: ["材料が足りない箇所は埋めず「材料不足」と明記する",
+                   "決められない場合は決めず、何が足りないかを書く"],
+      reduce: [], gate: [],
+    }[n.kind] || [];
+    if (見本.length) {
+      const box = el("div", "samples");
+      box.appendChild(el("span", "stencil", "よく使う書き方（押すと入ります）"));
+      見本.forEach(t => {
+        const b = el("button", "sample-btn", t);
+        b.onclick = () => { n.fail = t; render(); };
+        box.appendChild(b);
+      });
+      cs.appendChild(box);
+    }
     p.appendChild(cs);
   }
 
@@ -1277,8 +1327,13 @@ function drawInspector() {
   if (!上流候補.length) ds.appendChild(el("p", "hint", "（この手前に置ける部品がありません）"));
   ds.appendChild(wrap);
   if (n.deps.length)
-    ds.appendChild(check("偽のエッジを検査した", n.edgeChecked, v => n.edgeChecked = v,
-      "残した矢印は、直前の結果が本当に要るものだけ"));
+    ds.appendChild(check("上の矢印は、本当に要るものだけにした", n.edgeChecked, v => n.edgeChecked = v,
+      "「その仕事の結果が無いと、この仕事を始められない」ものだけ残します。"
+      + "要らない矢印を1本外すたびに、その仕事は前の段に上がって早く終わります。"));
+  if (n.kind === "verify")
+    ds.appendChild(el("p", "hint",
+      "⚠ 検証は、上で選んだ相手の中身を読みません。読むのは「検証する相手」に指定した1つだけです。"
+      + "ここで選ぶのは、いつ走るか（順番）を決めるためです。"));
   p.appendChild(ds);
 
   /* 下流側。段を挿入した直後は、ここで「本当に待つ必要がある仕事」だけを残す。 */
@@ -1405,9 +1460,26 @@ function drawInputControls(w) {
   w.appendChild(el("p", "hint",
     "図面を呼ぶときに外から渡す値です。1段目の仕事に自動で渡ります。"
     + "実行中に人へ聞くことはできないので、聞きたいことはここで受け取ります。"));
+  /* 呼び名と例は、打った端から下の「こう打って起動します」に反映する。
+     全体を作り直すと入力欄が消えてしまうので、その行だけ書き換える。 */
+  const 見本を更新 = () => {
+    const 行 = w.querySelector(".howto-line");
+    if (行) {
+      行.querySelector(".cmd").textContent = "/" + (S.name || "図面名");
+      行.querySelector(".slot").textContent =
+        S.input.sample.trim() || `ここに${S.input.name || "入力"}を書く`;
+    }
+    const 箱 = document.querySelector("#canvas .in-call");
+    if (箱) {
+      箱.firstChild.textContent = `/${S.name || "図面名"} `;
+      箱.querySelector(".slot").textContent =
+        S.input.sample.trim() || `ここに${S.input.name || "入力"}を書く`;
+    }
+  };
   const l1 = el("label", "f");
   l1.appendChild(el("span", "stencil", "呼び名"));
-  l1.appendChild(inp(S.input.name, "例: テーマ / 対象ファイル / 顧客名", v => S.input.name = v));
+  l1.appendChild(inp(S.input.name, "例: テーマ / 対象ファイル / 顧客名",
+    v => { S.input.name = v; 見本を更新(); }));
   w.appendChild(l1);
   if (!S.input.name.trim()) {
     w.appendChild(el("p", "hint", "呼び名を入れると、渡し方の説明と例を書けます。"));
@@ -1425,7 +1497,7 @@ function drawInputControls(w) {
   const l3 = el("label", "f");
   l3.appendChild(el("span", "stencil", "例（そのまま打てる1行）"));
   l3.appendChild(inp(S.input.sample, "例: 睡眠の質を上げる方法",
-    v => S.input.sample = v));
+    v => { S.input.sample = v; 見本を更新(); }));
   w.appendChild(l3);
 
   // 「…」では何を入れるのか伝わらない。そのまま打てる行を見せる。
@@ -1504,7 +1576,20 @@ function drawTitleBlock() {
     const b = el("button", "finding" + (f.warn ? " warn" : ""));
     b.appendChild(el("code", null, f.code));
     b.appendChild(el("span", null, f.msg));
-    b.onclick = () => { if (f.node) { sel = f.node.id; render(); } };
+    /* 指摘を押したら、その部品まで図面を動かして光らせる。
+       どこが悪いのかを目で探させない。 */
+    b.onclick = () => {
+      if (!f.node) return;
+      sel = f.node.id; render();
+      const t = document.querySelector(`#canvas .node[data-nid="${f.node.id}"]`);
+      if (t) {
+        t.scrollIntoView({ block: "center", inline: "center",
+          behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+        t.classList.add("flash");
+        setTimeout(() => t.classList.remove("flash"), 900);
+      }
+      document.querySelector(".col.right").scrollTop = 0;
+    };
     list.appendChild(b);
   });
   if (!findings.length && S.nodes.length)
