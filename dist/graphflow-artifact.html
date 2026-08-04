@@ -516,6 +516,19 @@ function estimate() {
     : n.kind === "gate" || n.kind === "reduce" ? 0 : 1), 0);
 }
 
+/* a が b に（依存をたどって）行き着くか。循環になる線を出さないために使う。 */
+function reaches(a, b) {
+  const seen = new Set();
+  const walk = id => {
+    if (id === b) return true;
+    if (seen.has(id)) return false;
+    seen.add(id);
+    const n = S.nodes.find(x => x.id === id);
+    return !!n && n.deps.some(walk);
+  };
+  return walk(a);
+}
+
 function cyclic() {
   const st = {};
   const walk = id => {
@@ -743,10 +756,14 @@ function insertStageBefore(group, kind) {
   if (n.kind === "verify") n.target = inherited.length === 1 ? inherited[0] : "";
   const at = Math.min(...group.map(g => S.nodes.indexOf(g)));
   S.nodes.splice(at, 0, n);
+  /* 🔴 その段の全員に線を引くのは「とりあえずの置き方」でしかない。
+     実際にその結果を要るのは一部だけ、ということがほとんど。
+     機械が勝手に引いた線なので、未検査に落として偽のエッジテストを人にやらせる。
+     （人が意図したのは「一段入れる」ことであって「全員が待つ」ことではない） */
   group.forEach(g => {
     if (!g.deps.includes(n.id)) {
       g.deps.push(n.id);
-      g.edgeChecked = true;               // 人が意図して足した線なので確認済み扱い
+      g.edgeChecked = false;
     }
   });
   sel = n.id;
@@ -868,6 +885,27 @@ function drawInspector() {
     ds.appendChild(check("不可逆な行動を含む", n.irreversible, v => n.irreversible = v,
       "公開・送信・決済・削除・本番反映。手前に人間ゲートが要ります"));
   p.appendChild(ds);
+
+  /* 下流側。段を挿入した直後は、ここで「本当に待つ必要がある仕事」だけを残す。 */
+  const us = el("div", "sect");
+  us.appendChild(el("span", "stencil", "この結果を待つ仕事"));
+  us.appendChild(el("p", "hint",
+    "外した仕事は、これを待たずに最初から走ります。段が1つ上がります。"));
+  const uw = el("div", "deps");
+  const cand = S.nodes.filter(x => x.id !== n.id && !reaches(n.id, x.id));
+  cand.forEach(x => {
+    const on = x.deps.includes(n.id);
+    const t = el("button", "dep" + (on ? " on" : ""), x.title || KIND[x.kind].ja);
+    t.onclick = () => {
+      if (on) x.deps = x.deps.filter(d => d !== n.id);
+      else { x.deps.push(n.id); x.edgeChecked = false; }
+      render();
+    };
+    uw.appendChild(t);
+  });
+  if (!cand.length) us.appendChild(el("p", "hint", "（この後ろに置ける部品がありません）"));
+  us.appendChild(uw);
+  p.appendChild(us);
 
   const ins = insertPicker("＋ この部品の前に一段入れる", "この部品の手前にだけ入れる",
     k => insertStageBefore([n], k));
