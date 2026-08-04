@@ -23,15 +23,28 @@ const argv = process.argv.slice(2);
 if (!argv.length || argv[0] === "-h" || argv[0] === "--help") {
   console.log(`書き出したワークフローを、AIを呼ばずに空回しします。
 
-  graphflow-dryrun <ワークフロー.js> [--pass]
+  graphflow-dryrun <ワークフロー.js> [--pass] [--null N]
 
-  --pass   検証がすべて合格(KEEP)を返す前提で回す。
-           既定はすべて不合格(DROP)＝繰り返しが最悪どこまで回るかを見る。`);
+  --pass    検証がすべて合格(KEEP)を返す前提で回す。
+            既定はすべて不合格(DROP)＝繰り返しが最悪どこまで回るかを見る。
+  --null N  N体に1体が null を返す（既定は落とさない）。
+            公式仕様で agent() は「中断・回復不能なAPIエラー」のとき null を返す。
+            https://code.claude.com/docs/en/workflows
+            落ちたことに図面が気づけるかを、課金なしで確かめる。`);
   process.exit(argv.length ? 0 : 1);
 }
 
 const file = argv[0];
 const 全部合格 = argv.includes("--pass");
+// N体に1体を null にする。0 は「落とさない」。
+const 落とす間隔 = (() => {
+  const i = argv.indexOf("--null");
+  if (i < 0) return 0;
+  const n = parseInt(argv[i + 1], 10);
+  if (!Number.isFinite(n) || n < 1) { console.error("--null には1以上の整数を渡します"); process.exit(1); }
+  return n;
+})();
+let 落とした数 = 0;
 
 let code;
 try { code = fs.readFileSync(path.resolve(file), "utf8"); }
@@ -62,6 +75,8 @@ const ctx = {
     const 節名 = opts.phase || 現在の節;
     節.set(節名, (節.get(節名) || 0) + 1);
     if (呼んだ数 > 1000) throw new Error("エージェントが1000体を超えました（実行側の上限）");
+    // 公式仕様: agent() は中断・回復不能なAPIエラーのとき null を返す
+    if (落とす間隔 && 呼んだ数 % 落とす間隔 === 0) { 落とした数++; return null; }
     return 偽の返事(opts.schema, 全部合格 ? "KEEP" : "DROP");
   },
   parallel: async (ts) => {
@@ -102,9 +117,11 @@ const ctx = {
 
   console.log(`\n✅ ${path.basename(file)} は最後まで走りました（${ms.toFixed(0)}ms）\n`);
   console.log(`  呼ぶAIの数: ${呼んだ数} 体`);
+  if (落とす間隔) console.log(`  null を返した: ${落とした数} 体（${落とす間隔}体に1体）`);
   if (周) console.log(`  繰り返し:   ${周} 周${全部合格 ? "" : "（検証がずっと不合格を返す最悪の場合）"}`);
   console.log("  節ごとの数:");
   for (const [k, v] of 節) console.log(`    ${k}: ${v} 体`);
+  if (argv.includes("--log")) { console.log("\n  出たログ:"); ログ.forEach(l => console.log(`    ${l}`)); }
   const 欠損 = ログ.filter(l => l.includes("INCOMPLETE") || l.startsWith("⚠"));
   if (欠損.length) { console.log("\n  ⚠ 出た警告:"); 欠損.forEach(l => console.log(`    ${l}`)); }
   console.log(`\n  戻り値の項目: ${戻り値 && typeof 戻り値 === "object" ? Object.keys(戻り値).join(", ") : String(戻り値)}`);

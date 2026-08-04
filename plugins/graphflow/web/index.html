@@ -1346,8 +1346,13 @@ function generate() {
           `        verdict: { type: "string", enum: ["KEEP", "DROP", "UNVERIFIED"] },`,
           `        reason: { type: "string" },`,
           `        needed: { type: "string" } } },`,
-          `    }).then(v => ({ item, ...v }))`,
-          `  )).then(a => a.filter(Boolean))`,
+          `    }).then(v => ({ item, ...(v || {`,
+          `      // 公式仕様: agent() は中断・回復不能なAPIエラーのとき null を返す。`,
+          `      // ここで落とすと、検証されなかった項目が KEEP でも DROP でもなく静かに消える。`,
+          `      verdict: "UNVERIFIED",`,
+          `      reason: "検証者が結果を返しませんでした（中断または回復不能なAPIエラー）",`,
+          `      needed: "この項目の再検証" }) }))`,
+          `  ))`,
         ].join("\n");
       }
       let viaVerify = false;
@@ -1376,13 +1381,18 @@ function generate() {
     const postOf = n => {
       const v = "r_" + n.id;
       if (n.kind === "fanout")
-        return [`log(\`${n.title || "並列"}: \${${v}.length}/\${${v}_items.length} 件が返りました\`)`];
+        return [
+          `log(\`${n.title || "並列"}: \${${v}.length}/\${${v}_items.length} 件が返りました\`)`,
+          `if (${v}.length < ${v}_items.length) log(\`⚠ ${n.title || "並列"}: \${${v}_items.length - ${v}.length}件が返っていません。この段の結果は欠けています。\`)`,
+        ];
       if (n.kind === "verify")
         return [
           `const ${v}_kept = ${v}.filter(x => x.verdict === "KEEP")`,
           `log(\`検証: KEEP \${${v}_kept.length} / DROP \${${v}.filter(x=>x.verdict==="DROP").length} / UNVERIFIED \${${v}.filter(x=>x.verdict==="UNVERIFIED").length}\`)`,
+          `if (${v}.some(x => x.verdict === "UNVERIFIED")) log(\`⚠ \${${v}.filter(x=>x.verdict==="UNVERIFIED").length}件は検証できていません。通ったものとして扱わないでください。\`)`,
         ];
-      return [];
+      // 単発・統合も agent() なので null で返りうる。黙って次の段に渡さない。
+      return [`if (!${v}) log(${jstr("⚠ 「" + (n.title || KIND[n.kind].ja) + "」が結果を返しませんでした（中断または回復不能なAPIエラー）。この先は、この結果なしで進みます。")})`];
     };
 
     /* 繰り返しの帯。実行中に人の入力は挟めないので、帯は1枚の図面に収まっている
@@ -1408,7 +1418,7 @@ function generate() {
         L.push("");
         L.push(`const 最大周回 = ${S.loop.max}`);
         L.push(`const 空回りで終了 = ${S.loop.dry}`);
-        L.push("let 周 = 0, 空回り = 0");
+        L.push("let 周 = 0, 空回り = 0, 未確認の残り = 0");
         L.push("const 既知の指摘 = new Set()");
         L.push("");
         L.push(`// ┌─ 繰り返す（${LR.a + 1}段目〜${LR.b + 1}段目）`);
@@ -1494,13 +1504,17 @@ function generate() {
           L.push("const 新しい指摘 = 未合格.filter(v => !既知の指摘.has(印(v)))");
           L.push("新しい指摘.forEach(v => 既知の指摘.add(印(v)))");
           L.push("if (新しい指摘.length === 0) 空回り++; else 空回り = 0");
-          L.push("log(`${周}周目: 未合格 ${未合格.length}件 / 新しい指摘 ${新しい指摘.length}件`"
+          L.push("// 検証できなかったものは「通った」ではない。合格の判定に混ぜない。");
+          L.push(`未確認の残り = ${jv}.filter(v => v.verdict === "UNVERIFIED").length`);
+          L.push("log(`${周}周目: 未合格 ${未合格.length}件 / 未確認 ${未確認の残り}件"
+            + " / 新しい指摘 ${新しい指摘.length}件`"
             + " + ` / 空回り ${空回り}/${空回りで終了}`)");
-          L.push("if (未合格.length === 0) { log(`${周}周目で全部通りました`); break }");
+          L.push("if (未合格.length === 0 && 未確認の残り === 0) { log(`${周}周目で全部通りました`); break }");
         }
         L.push("}");
         L.push("// └─ 繰り返し ここまで");
         L.push("if (周 >= 最大周回) log(`⚠ ${最大周回}周まで回しましたが終わっていません。残りは人が見てください。`)");
+        if (jv) L.push("if (未確認の残り > 0) log(`⚠ ${未確認の残り}件は検証できないまま終わりました。通ったものとして扱わないでください。`)");
         L.push("");
       }
     }
@@ -1515,8 +1529,15 @@ function generate() {
     }
 
     const last = seg[seg.length - 1];
-    L.push(last ? `return { result: r_${last.id}, cap: CAP }`
-                : "return { result: null, cap: CAP }   // この図面には仕事がありません");
+    if (last) {
+      // 最後の段が null で返ったまま「結果」として返さない
+      const 複数 = last.kind === "fanout" || last.kind === "verify" || last.kind === "reduce";
+      L.push("const 完成 = " + (複数 ? `r_${last.id}.length > 0` : `!!r_${last.id}`));
+      L.push('if (!完成) log("⚠ 最後の段が結果を返していません。この戻り値を完成物として扱わないでください。")');
+      L.push(`return { result: r_${last.id}, status: 完成 ? "OK" : "INCOMPLETE", cap: CAP }`);
+    } else {
+      L.push("return { result: null, status: \"INCOMPLETE\", cap: CAP }   // この図面には仕事がありません");
+    }
     return { file: nm + ".js", code: L.join("\n") };
   });
 }

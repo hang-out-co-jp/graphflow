@@ -104,13 +104,21 @@ const judged = (await parallel(unique.map((f, i) => () =>
     label: `検証:${i + 1}`,
     phase: '検証',
     schema: VERDICT,
-  }).then(v => ({ ...f, ...v }))
-))).filter(Boolean)
+  }).then(v => ({
+    ...f,
+    // 公式仕様で agent() は中断・回復不能なAPIエラーのとき null を返す。
+    // ここで落とすと「検証されなかった主張」が KEEP でも DROP でもなく
+    // 静かに消える。消さずに UNVERIFIED として残す。
+    ...(v || { verdict: 'UNVERIFIED', reason: '検証者が結果を返しませんでした（中断または回復不能なAPIエラー）', needed: 'この主張の再検証' }),
+  }))
+)))
 
+if (judged.length !== unique.length) log(`⚠ 検証に出した ${unique.length}件のうち ${judged.length}件しか戻っていません。`)
 const kept = judged.filter(v => v.verdict === 'KEEP')
 const dropped = judged.filter(v => v.verdict === 'DROP')
 const unverified = judged.filter(v => v.verdict === 'UNVERIFIED')
 log(`検証: KEEP ${kept.length} / DROP ${dropped.length} / UNVERIFIED ${unverified.length}`)
+if (unverified.length) log(`⚠ ${unverified.length}件は検証できていません。本文では使わず、末尾に「未確認」として残します。`)
 
 phase('統合')
 const report = await agent(`「${TOPIC}」について、検証を通った材料だけを使って報告をまとめてください。
@@ -134,9 +142,12 @@ ${JSON.stringify(unverified.map(u => ({ claim: u.claim, needed: u.needed })), nu
   },
 })
 
+// 統合も agent() なので null で返りうる。null を「報告なし」で静かに返さない。
+if (!report) log('⚠ 統合が結果を返しませんでした（中断または回復不能なAPIエラー）。報告は未完成です。')
+
 return {
   topic: TOPIC,
-  status,
+  status: report ? status : 'INCOMPLETE',
   counts: { gathered: flat.length, unique: unique.length, kept: kept.length, dropped: dropped.length, unverified: unverified.length },
   report: report && report.report,
   open_questions: (report && report.open_questions) || [],

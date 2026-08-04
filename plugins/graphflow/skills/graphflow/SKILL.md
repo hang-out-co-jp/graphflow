@@ -25,7 +25,18 @@ description: 業務フローをGUIで設計して Claude Code の dynamic workfl
    スクリプトと設計JSONが書き込まれます。書き込み先は `graphflow` を起動した
    ディレクトリ配下の `.claude/workflows/` に限定されています。
 
-4. 保存後、`/reload-plugins` は不要です。新しいセッションから `/<図面名>` で起動できます。
+4. 保存できたら、**AIを1体も呼ばずに空回しして確かめる**（課金は発生しません）:
+
+   ```bash
+   graphflow-dryrun .claude/workflows/<図面名>.js --pass
+   graphflow-dryrun .claude/workflows/<図面名>.js --pass --null 3 --log
+   ```
+
+   2本目は「3体に1体が `null` を返す」状況を作ります。公式仕様で `agent()` は中断・
+   回復不能なAPIエラーのとき `null` を返すので、**落ちても気づけるか**をここで見ます。
+   `⚠` がひとつも出ずに完走したら、それは静かに欠けています。
+
+5. 保存後、`/reload-plugins` は不要です。新しいセッションから `/<図面名>` で起動できます。
    同一セッションで使いたい場合はユーザーにその旨を伝えます。
 
 ## 設計を手伝うときの構え
