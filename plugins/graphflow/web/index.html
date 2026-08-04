@@ -354,7 +354,7 @@ pre{
         <input class="in" type="number" id="f-cap" min="1" max="1000"></label>
       <label class="f"><span class="stencil">1回の並列で走らせる上限</span>
         <input class="in" type="number" id="f-conc" min="1" max="16"></label>
-      <p class="hint">実行側の上限は同時16・総計1000。超える設計は書き出せません。</p>
+      <p class="hint">実行側の上限は同時16・総計1000。超える設計は書き出せません。<br>⚠ 16は<b>上限であって保証値ではありません</b>。実機では CPU のコア数−2 まで落ちます（8コアなら6）。</p>
     </div>
   </div></div>
 
@@ -598,11 +598,17 @@ function inspect() {
     push("K-16", "アンカーが未宣言です。何をもって正しいとするかが決まっていません", null);
   if (!S.caps.max) push("K-17", "総エージェント数の上限が未設定です", null);
   if (S.caps.max > 1000) push("K-18", "総エージェント数が実行側の上限1000を超えています", null);
-  if (S.caps.conc > 16) push("K-19", "並列数が実行側の同時実行上限16を超えています", null);
+  if (S.caps.conc > 16) push("K-19", "並列数が実行側の同時実行上限16を超えています（しかも16は上限で、実機ではコア数−2まで落ちます）", null);
 
   const est = estimate();
   if (S.caps.max && est > S.caps.max)
     push("K-20", `見積り${est}体が自分で決めた上限${S.caps.max}体を超えています`, null);
+  // 見積りは設計時の数。並列と検証は上流の返却件数ぶん動くので、実行時はこれを上回りうる。
+  // 上限に達したら書き出したコードが自分で止まるが、切り捨てが起きること自体は先に伝える。
+  if (S.caps.max && est > S.caps.max * 0.8 && est <= S.caps.max)
+    push("K-32", `見積り${est}体が上限${S.caps.max}体に迫っています。`
+      + `並列と検証は上流の返却件数ぶん増えるので、実行時に上限へ当たって切り捨てが起きます。`
+      + `上限を上げるか、並列の対象を減らしてください`, null, true);
 
   if (cyclic()) push("K-21", "依存が循環しています。順番が決まりません", null);
 
@@ -999,7 +1005,8 @@ function drawInspector() {
       sect.appendChild(area("並列で回す対象（1行1件）", n.items.join("\n"),
         v => n.items = v.split("\n").map(s => s.trim()).filter(Boolean),
         "観点でも、ファイル名でも、顧客名でもかまいません。1行がAI1体になり、"
-        + "上の指示文の末尾にその1行が足されて同時に走ります。実行側の同時実行上限は16です。\n"
+        + "上の指示文の末尾にその1行が足されて同時に走ります。\n"
+        + "⚠ 同時に走れるのは最大16。ただし16は上限で、実機ではコア数−2まで落ちます（8コアなら6）。\n"
         + "⚠ 対象だけを書くと「何についての対象か」が伝わりません。主語は目的（GOAL）に書いてください。"));
 
     if (n.kind === "verify") {
@@ -1304,6 +1311,28 @@ function generate() {
     }
     L.push(`const CAP = ${S.caps.max}   // 総エージェント数の上限`);
     L.push("");
+    L.push("/* 🔴 上限は宣言するだけでは何も止めない。ここで実際に止める。");
+    L.push("   並列と検証は上流の返却件数ぶん動くので、書き出した時点では体数が決まらない。");
+    L.push("   agent() は必ず spawn() 経由で呼ぶ（素の agent() を残さないこと）。");
+    L.push("   ⚠ 返すのは素の null ではなく Promise.resolve(null)。");
+    L.push("      検証は agent(...).then(...) と続くので、素の null だと即死する。 */");
+    L.push("let 発火数 = 0");
+    L.push("const spawn = (p, o) => {");
+    L.push("  if (発火数 >= CAP) {");
+    L.push("    log(`⚠ 上限 ${CAP} 体に達したので、これ以降は動かしません（${o && o.label || \"名前なし\"}）`)");
+    L.push("    return Promise.resolve(null)");
+    L.push("  }");
+    L.push("  発火数++");
+    L.push("  return agent(p, o)");
+    L.push("}");
+    L.push("// 残り枠まで切り詰める。切り捨てた件数は必ず出す（静かに減らさない）。");
+    L.push("const 残り枠 = () => Math.max(0, Math.min(CAP - 発火数, 4096))   // 4096 = VM境界を越える配列長の上限");
+    L.push("const 枠内に収める = (xs, 名) => {");
+    L.push("  const 収まる = xs.slice(0, 残り枠())");
+    L.push("  if (収まる.length < xs.length) log(`⚠ ${名}: ${xs.length - 収まる.length}件を上限で切り捨てました`)");
+    L.push("  return 収まる");
+    L.push("}");
+    L.push("");
 
     /* 段ごとに出す。同じ段のノードは互いに依存していないので、
        ひとつの parallel に入れて本当に同時に走らせる。
@@ -1328,8 +1357,8 @@ function generate() {
       const v = "r_" + n.id;
       if (n.kind === "fanout") {
         return [
-          `parallel(${v}_items.map((対象) => () =>`,
-          `    agent(\`${promptOf(n)}\n\n対象: \${対象}${ctxOf(n)}\`, {`,
+          `parallel(枠内に収める(${v}_items, ${jstr(n.title || "並列")}).map((対象) => () =>`,
+          `    spawn(\`${promptOf(n)}\n\n対象: \${対象}${ctxOf(n)}\`, {`,
           `      label: \`\${対象}\`,`,
           `      phase: ${jstr(KIND[n.kind].phase)},`,
           `      schema: ${JSON.stringify(schemaOf(n))},`,
@@ -1341,8 +1370,8 @@ function generate() {
         const t = S.nodes.find(x => x.id === n.target);
         const tv = t ? "r_" + t.id : "[]";
         return [
-          `parallel([${tv}].flat().filter(Boolean).map((item, i) => () =>`,
-          `    agent(\`${verifyPrompt(n, t)}\`, {`,
+          `parallel(枠内に収める([${tv}].flat().filter(Boolean), ${jstr(n.title || "検証")}).map((item, i) => () =>`,
+          `    spawn(\`${verifyPrompt(n, t)}\`, {`,
           `      label: \`検証:\${i + 1}\`,`,
           `      phase: "検証",`,
           `      schema: { type: "object", required: ["verdict", "reason"], properties: {`,
@@ -1372,7 +1401,7 @@ function generate() {
           + 材料.join("\n")
         : "";
       return [
-        `agent(\`${promptOf(n)}${ctx2}\`, {`,
+        `spawn(\`${promptOf(n)}${ctx2}\`, {`,
         `    label: ${jstr(n.title || KIND[n.kind].ja)},`,
         `    phase: ${jstr(KIND[n.kind].phase)},`,
         `    schema: ${JSON.stringify(schemaOf(n))},`,
@@ -1386,7 +1415,8 @@ function generate() {
       if (n.kind === "fanout")
         return [
           `log(\`${n.title || "並列"}: \${${v}.length}/\${${v}_items.length} 件が返りました\`)`,
-          `if (${v}.length < ${v}_items.length) log(\`⚠ ${n.title || "並列"}: \${${v}_items.length - ${v}.length}件が返っていません。この段の結果は欠けています。\`)`,
+          `// 上限で切り捨てた分は 枠内に収める() が別に出す。ここは「投げたのに返らなかった」だけを見る。`,
+          `if (${v}.length < Math.min(${v}_items.length, CAP)) log(\`⚠ ${n.title || "並列"}: \${Math.min(${v}_items.length, CAP) - ${v}.length}件が返っていません。この段の結果は欠けています。\`)`,
         ];
       if (n.kind === "verify")
         return [
