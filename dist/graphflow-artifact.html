@@ -179,6 +179,19 @@ svg.wire polygon.check{fill:var(--line)}
 .node[data-k="gate"] .node-top{background:var(--ai-soft)}
 .node[data-k="verify"] .node-top{background:var(--shu-soft)}
 
+/* 起動時に受け取るもの。部品ではないので、角を落として別物と分かるようにする */
+.in-box{
+  position:relative;width:172px;background:var(--panel);
+  border:1px dashed var(--ai);border-left-width:3px;border-left-style:solid;
+}
+.in-box .node-top{background:transparent;border-bottom:1px dashed var(--line-2)}
+.in-box .node-top .stencil{color:var(--ai)}
+.in-box .node-meta{white-space:normal;line-height:1.5}
+.in-call{
+  margin-top:6px;padding-top:5px;border-top:1px dashed var(--line-2);
+  font-family:var(--mono);font-size:10px;color:var(--ai);word-break:break-all;
+}
+
 /* 朱記 = 指摘マーク。図面上で赤いのは指摘だけ */
 .shu-mark{
   position:absolute;top:-9px;right:-9px;z-index:2;
@@ -328,6 +341,13 @@ pre{
     </div>
 
     <div class="sect">
+      <span class="stencil">起動時に受け取るもの</span>
+      <p class="hint">図面を呼ぶときに外から渡す値です。<b>1段目の仕事に自動で渡ります。</b><br>
+        実行中に人へ聞くことはできないので、聞きたいことはここで受け取ります。</p>
+      <div id="inputctl"></div>
+    </div>
+
+    <div class="sect">
       <span class="stencil">アンカー</span>
       <p class="hint">AIが言い訳できない現実。何をもって正しいとするか。</p>
       <div id="anchors"></div>
@@ -421,6 +441,8 @@ function blank() {
     name: "", goal: "", anchors: [], caps: { max: 8, conc: 5 }, nodes: [],
     // 繰り返しは部品ではなく「帯」。どの段からどの段までを、何周まで回すか。
     loop: { from: "", to: "", max: 5, dry: 2 },
+    // 起動時に外から受け取るもの。宣言すると 1段目の仕事に自動で渡る。
+    input: { name: "", desc: "" },
   };
 }
 
@@ -441,6 +463,10 @@ function normalize(d) {
       from: typeof lp.from === "string" ? lp.from : "",
       to: typeof lp.to === "string" ? lp.to : "",
       max: +lp.max || 5, dry: +lp.dry || 2,
+    },
+    input: {
+      name: typeof (d.input && d.input.name) === "string" ? d.input.name : "",
+      desc: typeof (d.input && d.input.desc) === "string" ? d.input.desc : "",
     },
     nodes: [],
   };
@@ -784,6 +810,7 @@ function render() {
   drawInspector();
   drawTitleBlock();
   drawAnchors();
+  drawInputControls();
   drawLoopControls();
   $("#f-name").value = S.name;
   $("#f-goal").value = S.goal;
@@ -829,6 +856,28 @@ function drawCanvas() {
     seg.forEach(n => (cols[r[n.id]] ||= []).push(n));
     const row = el("div", "rank-row");
     const keys = Object.keys(cols).map(Number).sort((a, b) => a - b);
+
+    /* 起動時に受け取るものを、図面の左端に置く。
+       何を受け取る figure なのかは、左パネルを開かなくても図で分かるべき。 */
+    if (si === 0 && S.input.name.trim()) {
+      const col = el("div", "rank-col");
+      const head = el("div", "rank-head");
+      head.appendChild(el("span", "n", "起動時"));
+      col.appendChild(head);
+      const box = el("div", "in-box");
+      box.dataset.nid = "__input__";
+      const top = el("div", "node-top");
+      top.appendChild(el("span", "stencil", "入力"));
+      box.appendChild(top);
+      const body = el("div", "node-body");
+      body.appendChild(el("div", "node-title", S.input.name));
+      if (S.input.desc.trim()) body.appendChild(el("div", "node-meta", S.input.desc));
+      body.appendChild(el("div", "in-call", `/${S.name || "図面名"} …`));
+      box.appendChild(body);
+      col.appendChild(box);
+      row.appendChild(col);
+    }
+
     const LR = loopRange();
     let loopBox = null;                    // 繰り返しの帯
     keys.forEach((k, i) => {
@@ -935,6 +984,10 @@ function drawWires() {
     n.deps.forEach(d => add(d, n.id, false));
     if (n.kind === "verify" && n.target && !n.deps.includes(n.target)) add(n.target, n.id, true);
   }
+  // 入力から1段目の仕事へ。どこに渡るのかを線で見せる。
+  if (S.input.name.trim() && c.querySelector('[data-nid="__input__"]'))
+    S.nodes.filter(n => !n.deps.length && n.kind !== "gate")
+      .forEach(n => add("__input__", n.id, false));
   c.insertBefore(svg, c.firstChild);
 }
 
@@ -1238,6 +1291,35 @@ function liveUpdate() {
   drawTitleBlock();
 }
 
+/* 起動時に外から受け取るもの。
+   実行中に人へ聞くことはできないので、聞きたいことは全部ここで受け取る。 */
+function drawInputControls() {
+  const w = $("#inputctl"); w.textContent = "";
+  const l1 = el("label", "f");
+  l1.appendChild(el("span", "stencil", "呼び名"));
+  l1.appendChild(inp(S.input.name, "例: テーマ / 対象ファイル / 顧客名", v => S.input.name = v));
+  w.appendChild(l1);
+  if (!S.input.name.trim()) {
+    w.appendChild(el("p", "hint", "（何も受け取りません。毎回おなじ内容で走ります）"));
+    return;
+  }
+  const l2 = el("label", "f");
+  l2.appendChild(el("span", "stencil", "何を渡すのか（渡す人への説明）"));
+  const t = el("textarea", "in");
+  t.value = S.input.desc || "";
+  t.placeholder = "例: 書きたい記事のテーマ。1行で。";
+  t.oninput = () => { S.input.desc = t.value; scheduleRender(); };
+  l2.appendChild(t);
+  w.appendChild(l2);
+  const 例 = el("p", "hint");
+  例.appendChild(document.createTextNode("呼び方: "));
+  例.appendChild(el("code", null, `/${S.name || "図面名"} ${S.input.name}のなかみ`));
+  w.appendChild(例);
+  const off = el("button", "add danger", "受け取らないようにする");
+  off.onclick = () => { S.input = { name: "", desc: "" }; render(); };
+  w.appendChild(off);
+}
+
 function drawLoopControls() {
   const w = $("#loopctl"); w.textContent = "";
   const rk = ranks();
@@ -1394,6 +1476,19 @@ function generate() {
         L.push("");
       }
     }
+    /* 1枚目だけが、外から起動時の入力を受け取る。
+       実行中に人へ聞けないので、聞きたいことはここで受け取るしかない。 */
+    if (i === 0 && S.input.name.trim()) {
+      L.push(`// 起動時に受け取るもの: ${lit(S.input.name)}`);
+      if (S.input.desc.trim()) L.push(`//   ${lit(S.input.desc)}`);
+      L.push(`// 呼び方: /${nm} ${lit(S.input.name)}のなかみ`);
+      L.push("const 入力 = args ?? null");
+      L.push(`if (入力 == null) {`);
+      L.push(`  log("⚠ ${lit(S.input.name)} が渡されていません。/${nm} に続けて渡してください。")`);
+      L.push(`  return { result: null, status: "INCOMPLETE", 足りないもの: ${jstr(S.input.name)} }`);
+      L.push("}");
+      L.push("");
+    }
     if (S.anchors.filter(Boolean).length) {
       L.push("// アンカー（AIの合意ではなく現実の証拠）:");
       S.anchors.filter(Boolean).forEach(a => L.push("//   - " + a));
@@ -1447,10 +1542,14 @@ function generate() {
     // 🔴 ゲートをまたぐ依存は、この図面の中に相手がいない。
     //    黙って落とすと前の図面の結果が消えるので、args から受け取る。
     const 外を見る = n => i > 0 && n.deps.some(d => !seg.some(x => x.id === d));
+    // 起動時の入力は、1段目（依存のない仕事）に渡す
+    const 入力を渡す = n => i === 0 && S.input.name.trim() && !n.deps.length;
+    const 入力行 = n => 入力を渡す(n)
+      ? `\n\n${lit(S.input.name)}: \${typeof 入力 === "string" ? 入力 : JSON.stringify(入力)}` : "";
     const ctxOf = n => {
       const parts = depsOf(n).map(d => "${JSON.stringify(" + d + ")}");
       if (外を見る(n)) parts.push("${JSON.stringify(前の図面)}");
-      return parts.length ? `\n\n前段の結果:\n` + parts.join("\n") : "";
+      return 入力行(n) + (parts.length ? `\n\n前段の結果:\n` + parts.join("\n") : "");
     };
 
     // エージェントを立てるノードを、await できる式1つにする
@@ -1498,10 +1597,10 @@ function generate() {
       // 検証を通っていない材料を「検証を通ったものだけ」と書かない
       const 材料 = kept.map(d => "${JSON.stringify(" + d + ")}");
       if (外を見る(n)) 材料.push("${JSON.stringify(前の図面)}");
-      const ctx2 = 材料.length
+      const ctx2 = 入力行(n) + (材料.length
         ? `\n\n${viaVerify ? "使ってよい材料（検証を通ったものだけ）" : "前段の結果"}:\n`
           + 材料.join("\n")
-        : "";
+        : "");
       return [
         `spawn(\`${promptOf(n)}${ctx2}\`, {`,
         `    label: ${jstr(n.title || KIND[n.kind].ja)},`,
@@ -1695,8 +1794,10 @@ function drawDialog() {
   $("#dlg-pre").textContent = tabs[cur].code;
   $("#dlg-msg").textContent = "";
   const split = tabs.length > 2 ? `人間ゲートで ${tabs.length - 1} 枚に割れています。` : "";
-  $("#dlg-path").textContent = split + (window.__GRAPHFLOW_LOCAL__
-    ? "" : ".js を .claude/workflows/ に置くと /図面名 で起動できます");
+  const 呼び方 = S.input.name.trim()
+    ? `呼び方: /${S.name}${tabs.length > 2 ? "-1" : ""} ${S.input.name}のなかみ`
+    : (window.__GRAPHFLOW_LOCAL__ ? "" : ".js を .claude/workflows/ に置くと /図面名 で起動できます");
+  $("#dlg-path").textContent = split + 呼び方;
   $("#dlg-save").hidden = !window.__GRAPHFLOW_LOCAL__;
 }
 
@@ -1713,9 +1814,12 @@ const TEMPLATES = {
       ["synthesize", "調査報告書にまとめる", "検証を通った情報だけを使い、市場機会・顧客課題・競合の弱点・推奨商品・販売戦略をまとめます。",
         null, [["report", "string"], ["opportunities", "array"]], "材料が足りない項目は「材料不足」と明記する"],
     ]),
-  "記事制作": () => build("article-build", "出典の付いた1万字の記事を、密度を落とさずに仕上げる",
+  // 起動時にテーマを受け取る例。同じ figure を何度でも別テーマで呼べる。
+  "記事制作": () => Object.assign(
+    build("article-build", "渡されたテーマで、出典の付いた1万字の記事を、密度を落とさずに仕上げる",
     ["一次情報（公式ドキュメント・原典）", "実際に手元で再現できた結果"], { max: 14, conc: 5 }, [
-      ["fanout", "材料を集める", "指定された角度から記事の材料を集めます。すべての主張に出典URLと公開日を付けます。",
+      ["fanout", "材料を集める",
+        "渡されたテーマについて、指定された角度から記事の材料を集めます。すべての主張に出典URLと公開日を付けます。",
         ["公式情報", "海外事例", "科学的根拠", "反対意見", "日本市場への影響"],
         [["claim", "string"], ["source_url", "string"], ["published_at", "string"]],
         "出典を確認できない主張は採用せず、落とした理由を残す"],
@@ -1725,6 +1829,8 @@ const TEMPLATES = {
         null, [["body", "string"], ["word_count", "number"]], "材料が足りない節は書かず、不足を明記する"],
       ["gate", "公開してよいか人が決める", "公開は不可逆です。ここで一度止まります。"],
     ]),
+    { input: { name: "テーマ", desc: "書きたい記事のテーマ。1行で。例: 遠征グルメでフォロワーを増やす方法" } }),
+
   // 1段目に「並列」を3本置く例。調べる対象が違うものは、別々の並列にする。
   "新商品の立ち上げ": () => buildGraph("product-launch",
     "新商品の訴求を決め、出す物を一気に作る",
