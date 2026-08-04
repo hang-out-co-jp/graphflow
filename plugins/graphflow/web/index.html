@@ -263,6 +263,10 @@ textarea.in{resize:vertical;min-height:56px;line-height:1.6}
   border:1px solid var(--line-2);background:var(--ground);color:var(--ink-3);
 }
 .dep.on{border-color:var(--ai);background:var(--ai-soft);color:var(--ink)}
+/* 札の中に矢印を入れて、どちらが先に走るのかを見て分かるようにする */
+.dep.flow{display:inline-flex;align-items:center;gap:5px}
+.dep.flow .ar{font-family:var(--mono);color:var(--ink-3);flex:none}
+.dep.flow.on .ar{color:var(--ai);font-weight:700}
 
 /* ── 表題欄（署名要素）─────────────────────────── */
 .titleblock{
@@ -675,8 +679,8 @@ function inspect() {
       if ((同時[rk[n.id]] || 0) < 2) return;          // 1本しか走らない段は関係ない
       if (!n.fileChecked)
         push("K-33", `「${n.title || KIND[n.kind].ja}」は同時に走る段にあります。`
-          + `ファイルを書き換えるかどうかを確かめてください`
-          + `（並列でファイルを書くと、互いの変更を上書きします）`, n);
+          + `右の「この仕事はファイルを書き換えますか」に答えてください`
+          + `（同時にファイルを書くと、互いの変更を上書きします）`, n);
     });
   }
 
@@ -1239,13 +1243,30 @@ function drawInspector() {
     p.appendChild(cs);
   }
 
-  /* 依存 */
+  const 自分 = n.title || KIND[n.kind].ja;
+
+  /* 🔴 上流と下流を、同じ形の2つの欄として並べる。
+     以前は「エッジ — 依存」という名前で、選ぶとどちらが先になるのかが
+     読み取れなかった。矢印を札の中に入れて、向きを見て分かるようにする。 */
   const ds = el("div", "sect");
-  ds.appendChild(el("span", "stencil", "エッジ — 依存"));
-  ds.appendChild(el("p", "hint", "この仕事は、本当にその結果を必要としますか。必要ないなら外してください。同じ段に並んで同時に走ります。"));
+  ds.appendChild(el("span", "stencil", "① この仕事より先に終わっているもの"));
+  const h1 = el("p", "hint");
+  h1.appendChild(document.createTextNode("選ぶと "));
+  h1.appendChild(el("b", null, `その仕事 → ${自分}`));
+  h1.appendChild(document.createTextNode(" の順になり、この仕事は段が1つ下がります。"));
+  h1.appendChild(el("br"));
+  h1.appendChild(document.createTextNode("外すと同じ段に並んで同時に走ります。"));
+  ds.appendChild(h1);
   const wrap = el("div", "deps");
-  S.nodes.filter(x => x.id !== n.id).forEach(x => {
-    const t = el("button", "dep" + (n.deps.includes(x.id) ? " on" : ""), x.title || KIND[x.kind].ja);
+  /* 🔴 すでにこの仕事を待っている相手は候補から外す。
+     選べてしまうと循環になり、段が決まらなくなる。 */
+  const 上流候補 = S.nodes.filter(x => x.id !== n.id && !reaches(x.id, n.id));
+  上流候補.forEach(x => {
+    const on = n.deps.includes(x.id);
+    const t = el("button", "dep flow" + (on ? " on" : ""));
+    t.appendChild(el("span", "nm", x.title || KIND[x.kind].ja));
+    t.appendChild(el("span", "ar", "→"));
+    t.title = `${x.title || KIND[x.kind].ja} → ${自分}`;
     t.onclick = () => {
       const i = n.deps.indexOf(x.id);
       i < 0 ? n.deps.push(x.id) : n.deps.splice(i, 1);
@@ -1253,33 +1274,29 @@ function drawInspector() {
     };
     wrap.appendChild(t);
   });
+  if (!上流候補.length) ds.appendChild(el("p", "hint", "（この手前に置ける部品がありません）"));
   ds.appendChild(wrap);
   if (n.deps.length)
     ds.appendChild(check("偽のエッジを検査した", n.edgeChecked, v => n.edgeChecked = v,
       "残した矢印は、直前の結果が本当に要るものだけ"));
-  if (n.kind !== "gate" && n.kind !== "reduce") {
-    ds.appendChild(check("ファイルを書き換えるか確かめた", n.fileChecked, v => n.fileChecked = v,
-      "同じ段で2本以上が同時に走るとき、機械には判断できないので人が答えます"));
-    if (n.fileChecked)
-      ds.appendChild(check("ファイルを書き換える", n.writesFiles, v => n.writesFiles = v,
-        "同じ段に2本以上あるときだけ、別の作業コピー（worktree）で動かします。"
-        + "1本しか走らない段では分離しません（分離すると修正が本物のファイルに届かないため）"));
-  }
-  if (n.kind !== "gate")
-    ds.appendChild(check("不可逆な行動を含む", n.irreversible, v => n.irreversible = v,
-      "公開・送信・決済・削除・本番反映。手前に人間ゲートが要ります"));
   p.appendChild(ds);
 
   /* 下流側。段を挿入した直後は、ここで「本当に待つ必要がある仕事」だけを残す。 */
   const us = el("div", "sect");
-  us.appendChild(el("span", "stencil", "この結果を待つ仕事"));
-  us.appendChild(el("p", "hint",
-    "外した仕事は、これを待たずに最初から走ります。段が1つ上がります。"));
+  us.appendChild(el("span", "stencil", "② この仕事の結果を待つもの"));
+  const h2 = el("p", "hint");
+  h2.appendChild(document.createTextNode("選ぶと "));
+  h2.appendChild(el("b", null, `${自分} → その仕事`));
+  h2.appendChild(document.createTextNode(" の順になります。外すと、その仕事は待たずに走ります。"));
+  us.appendChild(h2);
   const uw = el("div", "deps");
   const cand = S.nodes.filter(x => x.id !== n.id && !reaches(n.id, x.id));
   cand.forEach(x => {
     const on = x.deps.includes(n.id);
-    const t = el("button", "dep" + (on ? " on" : ""), x.title || KIND[x.kind].ja);
+    const t = el("button", "dep flow" + (on ? " on" : ""));
+    t.appendChild(el("span", "ar", "→"));
+    t.appendChild(el("span", "nm", x.title || KIND[x.kind].ja));
+    t.title = `${自分} → ${x.title || KIND[x.kind].ja}`;
     t.onclick = () => {
       if (on) x.deps = x.deps.filter(d => d !== n.id);
       else { x.deps.push(n.id); x.edgeChecked = false; }
@@ -1290,6 +1307,38 @@ function drawInspector() {
   if (!cand.length) us.appendChild(el("p", "hint", "（この後ろに置ける部品がありません）"));
   us.appendChild(uw);
   p.appendChild(us);
+
+  /* この仕事そのものの性質 */
+  const ps = el("div", "sect");
+  ps.appendChild(el("span", "stencil", "この仕事の性質"));
+  if (n.kind !== "gate" && n.kind !== "reduce") {
+    /* 「確かめた」と「書き換える」の2つのチェックは分かりにくかった。
+       1つの質問に3つの答え、という形にする。 */
+    const l = el("label", "f");
+    l.appendChild(el("span", "stencil", "この仕事はファイルを書き換えますか"));
+    const s2 = el("select", "in");
+    [["", "— まだ答えていない —"],
+     ["no", "書き換えない（読むだけ・調べるだけ）"],
+     ["yes", "書き換える（コードや文書を直す）"]].forEach(([v, t]) => {
+      const o = el("option", null, t); o.value = v; s2.appendChild(o);
+    });
+    s2.value = !n.fileChecked ? "" : (n.writesFiles ? "yes" : "no");
+    s2.onchange = () => {
+      n.fileChecked = s2.value !== "";
+      n.writesFiles = s2.value === "yes";
+      render();
+    };
+    l.appendChild(s2);
+    ps.appendChild(l);
+    ps.appendChild(el("p", "hint",
+      "同じ段で2本以上が同時に走るとき、全員が同じファイルを書くと互いの変更を上書きします。"
+      + "機械には判断できないので、ここだけ人が答えます。"
+      + "「書き換える」を選ぶと、その段が同時に走るときだけ別の作業コピーで動かします。"));
+  }
+  if (n.kind !== "gate")
+    ps.appendChild(check("不可逆な行動を含む", n.irreversible, v => n.irreversible = v,
+      "公開・送信・決済・削除・本番反映。手前に人間ゲートが要ります"));
+  p.appendChild(ps);
 
   const ins = insertPicker("＋ この部品の前に一段入れる", "この部品の手前にだけ入れる",
     k => insertStageBefore([n], k));
