@@ -1751,7 +1751,9 @@ function generate() {
     const ctxOf = n => {
       const parts = depsOf(n).map(d => "${JSON.stringify(" + d + ")}");
       if (外を見る(n)) parts.push("${JSON.stringify(前の図面)}");
-      return 入力行(n) + (parts.length ? `\n\n前段の結果:\n` + parts.join("\n") : "");
+      return 入力行(n)
+        + (parts.length ? `\n\n前段の結果:\n` + parts.join("\n") : "")
+        + 前の周(n);
     };
 
     // エージェントを立てるノードを、await できる式1つにする
@@ -1802,7 +1804,7 @@ function generate() {
       const ctx2 = 入力行(n) + (材料.length
         ? `\n\n${viaVerify ? "使ってよい材料（検証を通ったものだけ）" : "前段の結果"}:\n`
           + 材料.join("\n")
-        : "");
+        : "") + 前の周(n);
       return [
         `spawn(\`${promptOf(n)}${ctx2}\`, {`,
         `    label: ${jstr(n.title || KIND[n.kind].ja)},`,
@@ -1838,6 +1840,19 @@ function generate() {
     const inThisSeg = LR && seg.some(n => n.id === LR.from.id);
     const looped = n => inThisSeg && rk[n.id] >= LR.a && rk[n.id] <= LR.b;
     const asg = n => looped(n) ? `r_${n.id} = ` : `const r_${n.id} = `;
+
+    /* 🔴 繰り返しは「前の周の結果を、また直す」もの。
+       先頭のノードが毎周おなじ入力を読んでいたら、直したものが毎回捨てられ、
+       同じ作業を繰り返すだけになる（止まりはするが意味がない）。
+       帯の中で最後に成果物を作るノード（検証・整理は除く）の結果を、
+       2周目以降だけ先頭に渡す。 */
+    const 帯の成果物 = inThisSeg
+      ? (seg.filter(looped).filter(x => x.kind !== "verify" && x.kind !== "reduce" && x.kind !== "gate").slice(-1)[0] || null)
+      : null;
+    const 前の周 = n => (inThisSeg && rk[n.id] === LR.a && 帯の成果物 && 帯の成果物.id !== n.id)
+      ? "${周 > 1 ? `\\n\\n前の周でここまで直したもの（今回はこれを対象にします）:\\n"
+        + "${JSON.stringify(r_" + 帯の成果物.id + ")}` : \"\"}"
+      : "";
 
     for (const k of Object.keys(groups).map(Number).sort((a, b) => a - b)) {
       const g = groups[k];
