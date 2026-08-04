@@ -201,6 +201,7 @@ textarea.in{resize:vertical;min-height:56px;line-height:1.6}
 }
 .add:hover{border-color:var(--ai);color:var(--ai)}
 #inspector>.add{display:block;width:100%;margin-top:8px;text-align:center}
+#inspector>.add.pick{text-align:left;padding:5px 9px}
 .danger{border-color:var(--shu);color:var(--shu)}
 .hint{font-size:11.5px;color:var(--ink-3);line-height:1.5;margin:-4px 0 11px}
 .deps{display:flex;flex-wrap:wrap;gap:5px}
@@ -604,10 +605,8 @@ function drawCanvas() {
       const wide = live.reduce((a, n) => a + (n.kind === "fanout"
         ? Math.max(1, n.items.filter(Boolean).length) : n.kind === "reduce" ? 0 : 1), 0);
       if (wide > 1) head.appendChild(el("span", "sim", `同時に ${wide} 本`));
-      const ins = el("button", "rank-add", "＋ この前に一段");
-      ins.title = `${i + 1}段目の手前に一段入れる`;
-      ins.onclick = () => insertStageBefore(cols[k]);
-      head.appendChild(ins);
+      head.appendChild(insertPicker("＋ この前に一段", `${i + 1}段目の手前に入れる`,
+        kind => insertStageBefore(cols[k], kind)));
       col.appendChild(head);
       cols[k].forEach(n => col.appendChild(nodeEl(n)));
       row.appendChild(col);
@@ -719,15 +718,29 @@ function nodeEl(n) {
   return b;
 }
 
+/* 「何を入れるか」をその場で選ばせる。選んでから入る。 */
+function insertPicker(label, title, onPick) {
+  const s = el("select", "rank-add");
+  s.title = title;
+  const head = el("option", null, label); head.value = ""; s.appendChild(head);
+  Object.keys(KIND).forEach(k => {
+    const o = el("option", null, `　${KIND[k].ja}`); o.value = k; s.appendChild(o);
+  });
+  s.onchange = () => { const k = s.value; s.value = ""; if (k) onPick(k); };
+  return s;
+}
+
 /* その段の手前に一段入れる。
    新しい部品はその段が持っていた依存をそのまま引き継ぎ、
    その段の部品は新しい部品を待つようになる（＝段がひとつ下がる）。
    もとの依存は消さない。消すと整理ノードが素材を見失う。 */
-function insertStageBefore(group) {
+function insertStageBefore(group, kind) {
   const inherited = [...new Set(group.flatMap(n => n.deps))];
-  const n = newNode("single");
+  const n = newNode(kind || "single");
   n.deps = inherited;
   n.edgeChecked = inherited.length > 0;   // 引き継いだ依存は元々確認済みのもの
+  // newNode は「末端」から対象を推測するので、挿入時は引き継いだ依存に合わせ直す
+  if (n.kind === "verify") n.target = inherited.length === 1 ? inherited[0] : "";
   const at = Math.min(...group.map(g => S.nodes.indexOf(g)));
   S.nodes.splice(at, 0, n);
   group.forEach(g => {
@@ -856,8 +869,9 @@ function drawInspector() {
       "公開・送信・決済・削除・本番反映。手前に人間ゲートが要ります"));
   p.appendChild(ds);
 
-  const ins = el("button", "add", "＋ この部品の前に一段入れる");
-  ins.onclick = () => insertStageBefore([n]);
+  const ins = insertPicker("＋ この部品の前に一段入れる", "この部品の手前にだけ入れる",
+    k => insertStageBefore([n], k));
+  ins.className = "add pick";
   p.appendChild(ins);
 
   const del = el("button", "add danger", "この部品を外す");
