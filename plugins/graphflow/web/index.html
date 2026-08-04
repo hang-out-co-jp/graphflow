@@ -1,0 +1,1156 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GraphFlow 検図盤 — Claude Code ワークフロー設計</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%231B1E21'/><path d='M3 8h3M10 5h3M10 11h3M6 8l4-3M6 8l4 3' stroke='%23F1F2F4' stroke-width='1.2' fill='none'/><circle cx='13.4' cy='3' r='2' fill='%23D0342C'/></svg>">
+<style>
+:root{
+  --ground:#F1F2F4; --panel:#E7E9EC; --sunk:#DCDFE3;
+  --ink:#1B1E21; --ink-2:#5A6167; --ink-3:#878E95;
+  --line:#A9AFB5; --line-2:#C7CCD1;
+  --shu:#D0342C; --shu-soft:#F6DDDA;
+  --ai:#17456B; --ai-soft:#D9E4EE;
+  --ok:#2F6B4F;
+  --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+  --sans:"Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic",YuGothic,"Noto Sans JP",system-ui,sans-serif;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --ground:#15181A; --panel:#1E2225; --sunk:#101315;
+    --ink:#E3E7EA; --ink-2:#9BA3AA; --ink-3:#6E777E;
+    --line:#464E54; --line-2:#333A3F;
+    --shu:#FF6B57; --shu-soft:#3A211D;
+    --ai:#7FB2DE; --ai-soft:#1B2A38;
+    --ok:#6FBF97;
+  }
+}
+:root[data-theme="light"]{
+  --ground:#F1F2F4; --panel:#E7E9EC; --sunk:#DCDFE3;
+  --ink:#1B1E21; --ink-2:#5A6167; --ink-3:#878E95;
+  --line:#A9AFB5; --line-2:#C7CCD1;
+  --shu:#D0342C; --shu-soft:#F6DDDA;
+  --ai:#17456B; --ai-soft:#D9E4EE; --ok:#2F6B4F;
+}
+:root[data-theme="dark"]{
+  --ground:#15181A; --panel:#1E2225; --sunk:#101315;
+  --ink:#E3E7EA; --ink-2:#9BA3AA; --ink-3:#6E777E;
+  --line:#464E54; --line-2:#333A3F;
+  --shu:#FF6B57; --shu-soft:#3A211D;
+  --ai:#7FB2DE; --ai-soft:#1B2A38; --ok:#6FBF97;
+}
+
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0; background:var(--ground); color:var(--ink);
+  font-family:var(--sans); font-size:14px; line-height:1.65;
+  -webkit-font-smoothing:antialiased;
+}
+button,input,select,textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--ai);outline-offset:2px}
+
+/* ── 表題欄まわりで繰り返す製図ラベル ───────────────── */
+.stencil{
+  font-family:var(--mono); font-size:10px; font-weight:500;
+  letter-spacing:.26em; text-transform:uppercase; color:var(--ink-3);
+}
+
+.app{display:flex;flex-direction:column;height:100dvh;min-height:0}
+
+/* ── 図枠ヘッダ ───────────────────────────────── */
+header{
+  display:flex;align-items:baseline;gap:22px;flex-wrap:wrap;
+  padding:11px 18px;border-bottom:1px solid var(--line);
+  background:var(--panel);
+}
+.wordmark{font-family:var(--mono);font-size:15px;font-weight:600;letter-spacing:.3em;text-transform:uppercase}
+.wordmark span{color:var(--shu)}
+.hd-field{display:flex;align-items:baseline;gap:8px;min-width:0}
+.hd-field>.stencil{white-space:nowrap;flex:none}
+.hd-field input{
+  background:transparent;border:0;border-bottom:1px solid var(--line);
+  padding:1px 3px;font-family:var(--mono);font-size:13px;min-width:9ch;
+}
+.hd-field input:invalid{border-bottom-color:var(--shu);color:var(--shu)}
+.hd-spacer{margin-left:auto}
+.ghost{
+  background:transparent;border:1px solid var(--line);color:var(--ink-2);
+  padding:4px 11px;cursor:pointer;font-family:var(--mono);font-size:11px;
+  letter-spacing:.12em;text-transform:uppercase;
+}
+.ghost:hover{border-color:var(--ink-2);color:var(--ink)}
+
+/* ── 3欄 ─────────────────────────────────────── */
+main{flex:1;display:grid;grid-template-columns:190px minmax(0,1fr) 326px;min-height:0}
+.col{min-height:0;overflow-y:auto;overflow-x:hidden}
+.col.left{border-right:1px solid var(--line);background:var(--panel)}
+.col.right{border-left:1px solid var(--line);background:var(--panel)}
+.pad{padding:14px}
+.sect+.sect{margin-top:20px;padding-top:16px;border-top:1px dashed var(--line-2)}
+.sect>.stencil{display:block;margin-bottom:9px}
+
+/* ── 部品箱 ───────────────────────────────────── */
+.part{
+  display:block;width:100%;text-align:left;cursor:pointer;margin-bottom:5px;
+  padding:7px 10px;background:var(--ground);border:1px solid var(--line-2);
+}
+.part:hover{border-color:var(--ai);}
+.part b{display:block;font-size:13px;font-weight:600}
+.part i{display:block;font-style:normal;font-size:11px;color:var(--ink-3);line-height:1.45}
+.part[data-k="gate"]{border-left:3px solid var(--ai)}
+
+/* ── 図面（キャンバス）───────────────────────────── */
+.canvas-wrap{position:relative;overflow:auto;height:100%;background:var(--sunk)}
+.canvas-inner{position:relative;padding:26px;min-width:100%;width:max-content}
+svg.wire{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
+svg.wire path{fill:none;stroke:var(--line);stroke-width:1.25}
+svg.wire path.check{stroke-dasharray:3 3;stroke:var(--ink-3)}
+svg.wire polygon{fill:var(--line)}
+.grid-note{
+  position:sticky;top:0;z-index:3;display:flex;gap:16px;align-items:center;
+  padding:7px 26px;background:var(--sunk);border-bottom:1px solid var(--line-2);
+}
+.seg-band{
+  position:relative;margin:0 0 4px;padding:5px 0 3px;
+  border-top:1px solid var(--line-2);
+}
+.seg-band:first-child{border-top:0}
+.seg-band .stencil{color:var(--ai)}
+
+.rank-row{position:relative;display:flex;gap:28px;align-items:flex-start;padding:8px 0}
+.rank-col{display:flex;flex-direction:column;gap:12px}
+
+.node{
+  position:relative;width:172px;background:var(--ground);
+  border:1px solid var(--line);cursor:pointer;text-align:left;padding:0;
+  display:block;
+}
+.node:hover{border-color:var(--ink-2)}
+.node.sel{border-color:var(--ai);box-shadow:0 0 0 2px var(--ai-soft)}
+.node.bad{border-color:var(--shu)}
+.node-top{
+  display:flex;justify-content:space-between;align-items:center;gap:6px;
+  padding:3px 8px;border-bottom:1px solid var(--line-2);background:var(--panel);
+}
+.node-body{padding:7px 9px 9px}
+.node-title{font-size:12.5px;font-weight:600;line-height:1.4;word-break:break-word}
+.node-meta{margin-top:5px;font-family:var(--mono);font-size:10px;color:var(--ink-3);letter-spacing:.04em}
+.node[data-k="gate"]{border-style:double;border-width:3px;border-color:var(--ai);width:172px}
+.node[data-k="gate"] .node-top{background:var(--ai-soft)}
+.node[data-k="verify"] .node-top{background:var(--shu-soft)}
+
+/* 朱記 = 指摘マーク。図面上で赤いのは指摘だけ */
+.shu-mark{
+  position:absolute;top:-9px;right:-9px;z-index:2;
+  min-width:19px;height:19px;padding:0 5px;border-radius:50%;
+  background:var(--shu);color:#fff;
+  font-family:var(--mono);font-size:11px;font-weight:700;line-height:19px;text-align:center;
+}
+.empty-canvas{color:var(--ink-3);font-size:13px;max-width:46ch;padding:34px 6px}
+.empty-canvas code{font-family:var(--mono);font-size:12px;color:var(--ink-2)}
+
+/* ── 右欄フォーム ─────────────────────────────── */
+label.f{display:block;margin-bottom:11px}
+label.f>span{display:block;margin-bottom:3px}
+.in,textarea.in,select.in{
+  width:100%;background:var(--ground);border:1px solid var(--line-2);
+  padding:5px 7px;font-family:var(--mono);font-size:12px;
+}
+textarea.in{resize:vertical;min-height:56px;line-height:1.6}
+.in:focus{border-color:var(--ai)}
+.row{display:flex;gap:6px}
+.row .in{min-width:0}
+.chk{display:flex;gap:7px;align-items:flex-start;margin-bottom:8px;cursor:pointer}
+.chk input{margin:3px 0 0;flex:none}
+.chk span{font-size:12.5px;line-height:1.5}
+.chk small{display:block;color:var(--ink-3);font-size:11px;line-height:1.45}
+.pair{display:grid;grid-template-columns:1fr 92px 26px;gap:5px;margin-bottom:5px}
+.mini{
+  background:transparent;border:1px solid var(--line-2);color:var(--ink-3);
+  cursor:pointer;font-family:var(--mono);font-size:12px;padding:0;
+}
+.mini:hover{border-color:var(--shu);color:var(--shu)}
+.add{
+  background:transparent;border:1px dashed var(--line);color:var(--ink-2);
+  cursor:pointer;padding:4px 9px;font-family:var(--mono);font-size:11px;letter-spacing:.1em;
+}
+.add:hover{border-color:var(--ai);color:var(--ai)}
+.danger{border-color:var(--shu);color:var(--shu)}
+.hint{font-size:11.5px;color:var(--ink-3);line-height:1.5;margin:-4px 0 11px}
+.deps{display:flex;flex-wrap:wrap;gap:5px}
+.dep{
+  font-family:var(--mono);font-size:11px;padding:2px 7px;cursor:pointer;
+  border:1px solid var(--line-2);background:var(--ground);color:var(--ink-3);
+}
+.dep.on{border-color:var(--ai);background:var(--ai-soft);color:var(--ink)}
+
+/* ── 表題欄（署名要素）─────────────────────────── */
+.titleblock{
+  display:grid;grid-template-columns:repeat(4,minmax(76px,auto)) 1fr auto;
+  align-items:stretch;border-top:1px solid var(--line);background:var(--panel);
+}
+.tb{padding:7px 14px;border-right:1px solid var(--line-2);min-width:0}
+.tb .stencil{display:block}
+.tb b{font-family:var(--mono);font-size:16px;font-weight:600;letter-spacing:.02em}
+.tb.flag b{color:var(--shu)}
+.tb.pass b{color:var(--ok)}
+.tb-list{overflow-y:auto;max-height:74px;padding:6px 14px;border-right:1px solid var(--line-2)}
+.finding{
+  display:flex;gap:8px;align-items:baseline;font-size:11.5px;line-height:1.5;
+  padding:1px 0;cursor:pointer;background:none;border:0;text-align:left;width:100%;
+}
+.finding code{font-family:var(--mono);font-size:10px;color:var(--shu);flex:none;letter-spacing:.06em}
+.finding.warn code{color:var(--ink-3)}
+.finding:hover span{text-decoration:underline}
+.tb-actions{display:flex;align-items:center;gap:8px;padding:8px 14px}
+.issue{
+  background:var(--ink);color:var(--ground);border:1px solid var(--ink);
+  padding:8px 20px;cursor:pointer;font-family:var(--mono);font-size:12px;
+  font-weight:600;letter-spacing:.22em;text-transform:uppercase;
+}
+.issue[disabled]{
+  background:transparent;color:var(--ink-3);border-color:var(--line);
+  cursor:not-allowed;letter-spacing:.22em;
+}
+.issue:not([disabled]):hover{background:var(--ai);border-color:var(--ai);color:#fff}
+@media (prefers-reduced-motion:no-preference){
+  .issue:not([disabled]){animation:ready .45s ease-out}
+  @keyframes ready{from{transform:scale(.94);opacity:.4}to{transform:none;opacity:1}}
+}
+
+/* ── 出図ダイアログ ───────────────────────────── */
+dialog{
+  border:1px solid var(--line);background:var(--ground);color:var(--ink);
+  padding:0;width:min(920px,94vw);max-height:88dvh;
+}
+dialog::backdrop{background:rgba(0,0,0,.55)}
+.dlg-hd{display:flex;align-items:center;gap:14px;padding:11px 18px;border-bottom:1px solid var(--line);background:var(--panel)}
+.dlg-hd .stencil{flex:1}
+.tabs{display:flex;gap:0;border-bottom:1px solid var(--line);background:var(--panel);overflow-x:auto}
+.tab{
+  background:transparent;border:0;border-bottom:2px solid transparent;
+  padding:7px 15px;cursor:pointer;font-family:var(--mono);font-size:11.5px;white-space:nowrap;color:var(--ink-3);
+}
+.tab.on{border-bottom-color:var(--shu);color:var(--ink)}
+.dlg-bd{padding:0;overflow:auto;max-height:60dvh;background:var(--sunk)}
+pre{
+  margin:0;padding:16px 18px;font-family:var(--mono);font-size:12px;line-height:1.62;
+  white-space:pre;overflow-x:auto;color:var(--ink);
+}
+.dlg-ft{display:flex;gap:9px;align-items:center;padding:11px 18px;border-top:1px solid var(--line);background:var(--panel);flex-wrap:wrap}
+.dlg-ft .stencil{margin-right:auto}
+.solid{background:var(--ai);border:1px solid var(--ai);color:#fff;padding:6px 15px;cursor:pointer;font-family:var(--mono);font-size:11.5px}
+.solid:hover{filter:brightness(1.12)}
+.saved{color:var(--ok);font-family:var(--mono);font-size:11.5px}
+
+@media (max-width:1080px){
+  main{grid-template-columns:1fr;grid-template-rows:auto minmax(280px,1fr) auto}
+  .col.left,.col.right{border:0;border-top:1px solid var(--line)}
+  .col.left{order:2}.canvas-wrap{order:1}.col.right{order:3;max-height:44dvh}
+  .titleblock{grid-template-columns:repeat(2,1fr)}
+  .tb-list{grid-column:1/-1;max-height:90px}
+  .tb-actions{grid-column:1/-1}
+}
+</style>
+</head>
+<body>
+<div class="app">
+
+<header>
+  <div class="wordmark">GRAPH<span>FLOW</span></div>
+  <div class="hd-field">
+    <span class="stencil">図面名</span>
+    <input id="f-name" pattern="[a-z0-9][a-z0-9-]*" spellcheck="false" aria-label="図面名（コマンド名になる）">
+  </div>
+  <div class="hd-field" style="flex:1;min-width:200px">
+    <span class="stencil">目的</span>
+    <input id="f-goal" style="width:100%" aria-label="このフローが達成すること">
+  </div>
+  <div class="hd-spacer"></div>
+  <select class="ghost" id="sel-tmpl" aria-label="ひな形を読み込む"><option value="">ひな形…</option></select>
+  <button class="ghost" id="btn-load">読込</button>
+  <button class="ghost" id="btn-theme" title="明暗を切り替える">◐</button>
+</header>
+
+<main>
+  <!-- ── 左：部品箱 ── -->
+  <div class="col left"><div class="pad">
+    <div class="sect">
+      <span class="stencil">部品箱</span>
+      <button class="part" data-k="single"><b>単発</b><i>1担当が1回で終える仕事</i></button>
+      <button class="part" data-k="fanout"><b>並列調査</b><i>観点ごとに同時に走らせる</i></button>
+      <button class="part" data-k="reduce"><b>整理</b><i>重複を消し件数を数える。コードでやる</i></button>
+      <button class="part" data-k="verify"><b>検証</b><i>別文脈で「間違い」を探す</i></button>
+      <button class="part" data-k="synthesize"><b>統合</b><i>検証を通ったものだけで仕上げる</i></button>
+      <button class="part" data-k="gate"><b>人間ゲート</b><i>ここで図面が2枚に割れる</i></button>
+    </div>
+
+    <div class="sect">
+      <span class="stencil">アンカー</span>
+      <p class="hint">AIが言い訳できない現実。何をもって正しいとするか。</p>
+      <div id="anchors"></div>
+      <button class="add" id="btn-anchor">＋ 追加</button>
+    </div>
+
+    <div class="sect">
+      <span class="stencil">上限</span>
+      <label class="f"><span class="stencil">総エージェント数</span>
+        <input class="in" type="number" id="f-cap" min="1" max="1000"></label>
+      <label class="f"><span class="stencil">1回のFan-out並列数</span>
+        <input class="in" type="number" id="f-conc" min="1" max="16"></label>
+      <p class="hint">実行側の上限は同時16・総計1000。超える設計は出図できません。</p>
+    </div>
+  </div></div>
+
+  <!-- ── 中：図面 ── -->
+  <div class="canvas-wrap">
+    <div class="grid-note">
+      <span class="stencil">図面</span>
+      <span class="stencil" id="scale-note">尺度 — / 節 —</span>
+    </div>
+    <div class="canvas-inner" id="canvas"></div>
+  </div>
+
+  <!-- ── 右：ノード詳細 ── -->
+  <div class="col right"><div class="pad" id="inspector"></div></div>
+</main>
+
+<!-- ── 表題欄 ── -->
+<div class="titleblock">
+  <div class="tb" id="tb-findings"><span class="stencil">検図</span><b>—</b></div>
+  <div class="tb" id="tb-anchor"><span class="stencil">アンカー</span><b>—</b></div>
+  <div class="tb" id="tb-cap"><span class="stencil">上限</span><b>—</b></div>
+  <div class="tb" id="tb-gate"><span class="stencil">図面枚数</span><b>—</b></div>
+  <div class="tb-list" id="tb-list"></div>
+  <div class="tb-actions">
+    <button class="issue" id="btn-issue" disabled>出図</button>
+  </div>
+</div>
+</div>
+
+<dialog id="dlg">
+  <div class="dlg-hd">
+    <span class="stencil">出図 — 検図済</span>
+    <button class="ghost" id="dlg-x">閉じる</button>
+  </div>
+  <div class="tabs" id="dlg-tabs"></div>
+  <div class="dlg-bd"><pre id="dlg-pre"></pre></div>
+  <div class="dlg-ft">
+    <span class="stencil" id="dlg-path"></span>
+    <span class="saved" id="dlg-msg"></span>
+    <button class="ghost" id="dlg-copy">コピー</button>
+    <button class="ghost" id="dlg-dl">ダウンロード</button>
+    <button class="solid" id="dlg-save" hidden>.claude/workflows/ に保存</button>
+  </div>
+</dialog>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const el = (t, c, x) => { const n = document.createElement(t); if (c) n.className = c; if (x != null) n.textContent = x; return n; };
+const esc = s => String(s ?? "").replace(/[&<>]/g, m => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[m]));
+const jstr = s => JSON.stringify(String(s ?? ""));
+
+const KIND = {
+  single:     { ja: "単発",     phase: "実行" },
+  fanout:     { ja: "並列調査", phase: "調査" },
+  reduce:     { ja: "整理",     phase: "整理" },
+  verify:     { ja: "検証",     phase: "検証" },
+  synthesize: { ja: "統合",     phase: "統合" },
+  gate:       { ja: "人間ゲート", phase: "承認" },
+};
+
+let seq = 0;
+const nid = () => "n" + (++seq);
+
+let S = blank();
+let sel = null;
+let findings = [];
+
+function blank() {
+  return { name: "", goal: "", anchors: [], caps: { max: 8, conc: 5 }, nodes: [] };
+}
+
+function newNode(kind) {
+  const last = S.nodes[S.nodes.length - 1];
+  return {
+    id: nid(), kind,
+    title: "", job: "",
+    items: kind === "fanout" ? [] : null,
+    outputs: kind === "gate" ? [] : [{ name: "", type: "string" }],
+    fail: "",
+    deps: last ? [last.id] : [],
+    edgeChecked: false,
+    irreversible: false,
+    countCheck: kind === "reduce",
+    target: kind === "verify" ? (last ? last.id : "") : "",
+    lens: "",
+  };
+}
+
+/* ══ 検図 ══════════════════════════════════════════════
+   ここが本体。指摘(block)が1件でもあれば出図できない。 */
+function inspect() {
+  const f = [];
+  const push = (code, msg, node, warn) => f.push({ code, msg, node: node || null, warn: !!warn });
+  const byId = Object.fromEntries(S.nodes.map(n => [n.id, n]));
+  const work = S.nodes.filter(n => n.kind !== "gate");
+
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(S.name))
+    push("K-1", "図面名は英小文字・数字・ハイフンだけ。そのままコマンド名になります", null);
+  if (!S.goal.trim())
+    push("K-2", "目的が空です。統合ノードが何に向かって仕上げるか決まりません", null);
+  if (!S.nodes.length)
+    push("K-3", "ノードがありません。左の部品箱から置いてください", null);
+
+  for (const n of S.nodes) {
+    const at = n.title || KIND[n.kind].ja;
+    if (!n.title.trim()) push("K-4", `${KIND[n.kind].ja}ノードに名前がありません`, n);
+    if (n.kind === "gate") continue;
+
+    // 整理はコードで動くのでAIへの指示文を持たない。検証は観点から指示文を組み立てる。
+    const needsJob = n.kind !== "reduce" && n.kind !== "verify";
+    const callsAI = n.kind !== "reduce";
+    if (needsJob && !n.job.trim()) push("K-5", `「${at}」に仕事の中身がありません`, n);
+    const outs = n.outputs.filter(o => o.name.trim());
+    if (!outs.length) push("K-6", `「${at}」に契約(OUTPUT)がありません。次のノードが読めません`, n);
+    if (callsAI && !n.fail.trim()) push("K-7", `「${at}」に失敗時の動作がありません。AIが推測で埋めます`, n);
+
+    if (n.deps.length && !n.edgeChecked)
+      push("K-8", `「${at}」の依存が偽のエッジか未検査です`, n);
+    if (n.kind === "fanout") {
+      const c = n.items.filter(Boolean).length;
+      if (!c) push("K-9", `「${at}」に並列で回す観点がありません`, n);
+      if (c > S.caps.conc) push("K-10", `「${at}」の観点${c}件が並列上限${S.caps.conc}を超えています`, n);
+    }
+    if (n.kind === "reduce" && !n.countCheck)
+      push("K-11", `「${at}」で件数確認をしていません。静かに欠けた1件に気づけません`, n);
+    if (n.kind === "verify") {
+      if (!n.target || !byId[n.target]) push("K-12", `「${at}」が誰を検証するのか未指定です`, n);
+      else if (n.target === n.id) push("K-12", `「${at}」が自分自身を検証しています`, n);
+      if (!n.lens.trim()) push("K-13", `「${at}」の観点が空です。3人が同じ角度で見ても独立にはなりません`, n);
+    }
+    if (n.irreversible) {
+      const seg = segmentOf(n.id);
+      const gatesBefore = order().slice(0, order().findIndex(x => x.id === n.id)).some(x => x.kind === "gate");
+      if (!gatesBefore) push("K-14", `「${at}」は不可逆なのに手前に人間ゲートがありません`, n);
+      void seg;
+    }
+  }
+
+  if (work.length && !S.nodes.some(n => n.kind === "verify"))
+    push("K-15", "検証ノードがありません。作業者だけを100体並べても誤りは100件に増えるだけです", null);
+  if (!S.anchors.filter(a => a.trim()).length)
+    push("K-16", "アンカーが未宣言です。何をもって正しいとするかが決まっていません", null);
+  if (!S.caps.max) push("K-17", "総エージェント数の上限が未設定です", null);
+  if (S.caps.max > 1000) push("K-18", "総エージェント数が実行側の上限1000を超えています", null);
+  if (S.caps.conc > 16) push("K-19", "並列数が実行側の同時実行上限16を超えています", null);
+
+  const est = estimate();
+  if (S.caps.max && est > S.caps.max)
+    push("K-20", `見積り${est}体が自分で決めた上限${S.caps.max}体を超えています`, null);
+
+  if (cyclic()) push("K-21", "依存が循環しています。順番が決まりません", null);
+
+  for (const n of S.nodes) {
+    if (n.kind === "gate") continue;
+    const used = S.nodes.some(m => m.deps.includes(n.id) || m.target === n.id);
+    if (!used && n.kind !== "synthesize" && S.nodes.length > 1)
+      push("K-22", `「${n.title || KIND[n.kind].ja}」の結果を誰も受け取っていません`, n, true);
+  }
+  return f;
+}
+
+function estimate() {
+  return S.nodes.reduce((a, n) => a + (n.kind === "fanout" ? Math.max(1, n.items.filter(Boolean).length)
+    : n.kind === "gate" || n.kind === "reduce" ? 0 : 1), 0);
+}
+
+function cyclic() {
+  const st = {};
+  const walk = id => {
+    if (st[id] === 1) return true;
+    if (st[id] === 2) return false;
+    st[id] = 1;
+    const n = S.nodes.find(x => x.id === id);
+    if (n) for (const d of n.deps) if (walk(d)) return true;
+    st[id] = 2; return false;
+  };
+  return S.nodes.some(n => walk(n.id));
+}
+
+/* 依存の深さで段を決める（自動レイアウト。手で置かせない） */
+function ranks() {
+  const r = {}, byId = Object.fromEntries(S.nodes.map(n => [n.id, n]));
+  const depth = (id, seen) => {
+    if (r[id] != null) return r[id];
+    if (seen.has(id)) return 0;
+    seen.add(id);
+    const n = byId[id];
+    const d = !n || !n.deps.length ? 0 : 1 + Math.max(...n.deps.map(x => depth(x, seen)));
+    return (r[id] = d);
+  };
+  S.nodes.forEach(n => depth(n.id, new Set()));
+  return r;
+}
+
+function order() {
+  const r = ranks();
+  return [...S.nodes].sort((a, b) => (r[a.id] - r[b.id]) || (S.nodes.indexOf(a) - S.nodes.indexOf(b)));
+}
+
+/* 人間ゲートで図面を割る。実行中に人の入力は挟めないので、
+   ゲートは「ノード」ではなく「図面の切れ目」として扱う。 */
+function segments() {
+  const segs = [[]];
+  for (const n of order()) {
+    if (n.kind === "gate") { segs[segs.length - 1].gate = n; segs.push([]); }
+    else segs[segs.length - 1].push(n);
+  }
+  return segs.filter(s => s.length);
+}
+function segmentOf(id) { return segments().findIndex(s => s.some(n => n.id === id)); }
+
+/* ══ 描画 ══════════════════════════════════════════════ */
+function render() {
+  findings = inspect();
+  drawCanvas();
+  drawInspector();
+  drawTitleBlock();
+  drawAnchors();
+  $("#f-name").value = S.name;
+  $("#f-goal").value = S.goal;
+  $("#f-cap").value = S.caps.max || "";
+  $("#f-conc").value = S.caps.conc || "";
+}
+
+function badges(id) { return findings.filter(f => f.node && f.node.id === id && !f.warn).length; }
+
+function drawCanvas() {
+  const c = $("#canvas"); c.textContent = "";
+  if (!S.nodes.length) {
+    const e = el("div", "empty-canvas");
+    e.innerHTML = "左の<b>部品箱</b>から部品を置くと、依存の深さで図面が自動で起きます。<br><br>"
+      + "描く順番ではなく<b>依存だけ</b>が段を決めます。前の結果を必要としない仕事は、勝手に同じ段に並びます。"
+      + "<br><br>迷ったら上の<code>ひな形</code>から実物を1枚読んでください。";
+    c.appendChild(e); return;
+  }
+  const segs = segments();
+  segs.forEach((seg, si) => {
+    const band = el("div", "seg-band");
+    const lb = el("span", "stencil", `図面 ${si + 1} / ${segs.length}`
+      + (si > 0 ? "（承認後）" : segs.length > 1 ? "（承認前）" : ""));
+    band.appendChild(lb);
+
+    const r = ranks();
+    const cols = {};
+    seg.forEach(n => (cols[r[n.id]] ||= []).push(n));
+    const row = el("div", "rank-row");
+    Object.keys(cols).map(Number).sort((a, b) => a - b).forEach(k => {
+      const col = el("div", "rank-col");
+      cols[k].forEach(n => col.appendChild(nodeEl(n)));
+      row.appendChild(col);
+    });
+    // ゲートは流れの続きなので、段を変えず右端に置く
+    if (seg.gate) {
+      const col = el("div", "rank-col");
+      col.appendChild(nodeEl(seg.gate));
+      row.appendChild(col);
+    }
+    band.appendChild(row);
+    c.appendChild(band);
+  });
+  $("#scale-note").textContent = `ノード ${S.nodes.length} / 図面 ${segs.length}枚 / 見積り ${estimate()}体`;
+  requestAnimationFrame(drawWires);
+}
+
+/* 依存を線で引く。線が引かれていないノードは、独立して同時に走る。 */
+const NS = "http://www.w3.org/2000/svg";
+function drawWires() {
+  const c = $("#canvas");
+  const old = c.querySelector("svg.wire");
+  if (old) old.remove();
+  if (!S.nodes.length) return;
+
+  const box = c.getBoundingClientRect();
+  const at = id => {
+    const n = c.querySelector(`[data-nid="${id}"]`);
+    if (!n) return null;
+    const r = n.getBoundingClientRect();
+    return {
+      l: r.left - box.left, r: r.right - box.left,
+      t: r.top - box.top, b: r.bottom - box.top,
+      cy: r.top - box.top + r.height / 2,
+    };
+  };
+
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("class", "wire");
+  const add = (from, to, dashed) => {
+    const a = at(from), b = at(to);
+    if (!a || !b) return;
+    // 右向きに素直に流れるとき以外は、下側を回して衝突を避ける
+    const rightward = b.l >= a.r - 4;
+    const x1 = rightward ? a.r : a.l + (a.r - a.l) / 2;
+    const y1 = rightward ? a.cy : a.b;
+    const x2 = rightward ? b.l : b.l + (b.r - b.l) / 2;
+    const y2 = rightward ? b.cy : b.t;
+    const p = document.createElementNS(NS, "path");
+    const d = rightward
+      ? `M${x1} ${y1} C${x1 + 20} ${y1}, ${x2 - 20} ${y2}, ${x2} ${y2}`
+      : `M${x1} ${y1} C${x1} ${y1 + 22}, ${x2} ${y2 - 22}, ${x2} ${y2}`;
+    p.setAttribute("d", d);
+    if (dashed) p.setAttribute("class", "check");
+    svg.appendChild(p);
+    const head = document.createElementNS(NS, "polygon");
+    head.setAttribute("points", rightward
+      ? `${x2} ${y2},${x2 - 6} ${y2 - 3.4},${x2 - 6} ${y2 + 3.4}`
+      : `${x2} ${y2},${x2 - 3.4} ${y2 - 6},${x2 + 3.4} ${y2 - 6}`);
+    svg.appendChild(head);
+  };
+
+  for (const n of S.nodes) {
+    n.deps.forEach(d => add(d, n.id, false));
+    if (n.kind === "verify" && n.target && !n.deps.includes(n.target)) add(n.target, n.id, true);
+  }
+  c.insertBefore(svg, c.firstChild);
+}
+
+function nodeEl(n) {
+  const b = el("button", "node" + (sel === n.id ? " sel" : "") + (badges(n.id) ? " bad" : ""));
+  b.dataset.k = n.kind;
+  b.dataset.nid = n.id;
+  const top = el("div", "node-top");
+  top.appendChild(el("span", "stencil", KIND[n.kind].ja));
+  if (n.irreversible) top.appendChild(el("span", "stencil", "不可逆"));
+  b.appendChild(top);
+  const body = el("div", "node-body");
+  body.appendChild(el("div", "node-title", n.title || "（無題）"));
+  let meta = "";
+  if (n.kind === "fanout") meta = `×${n.items.filter(Boolean).length}`;
+  if (n.kind === "verify") { const t = S.nodes.find(x => x.id === n.target); meta = t ? `→ ${t.title || "?"}` : "対象未指定"; }
+  if (n.kind !== "gate") { const o = n.outputs.filter(x => x.name.trim()).length; meta += (meta ? " / " : "") + `契約${o}項`; }
+  if (meta) body.appendChild(el("div", "node-meta", meta));
+  b.appendChild(body);
+  const k = badges(n.id);
+  if (k) b.appendChild(el("span", "shu-mark", String(k)));
+  b.onclick = () => { sel = n.id; render(); };
+  return b;
+}
+
+/* ══ 右欄 ══════════════════════════════════════════════ */
+function drawInspector() {
+  const p = $("#inspector"); p.textContent = "";
+  const n = S.nodes.find(x => x.id === sel);
+  if (!n) {
+    const s = el("div", "sect");
+    s.appendChild(el("span", "stencil", "ノード詳細"));
+    s.appendChild(el("p", "hint", "図面の部品を選ぶと、ここで契約と依存を決められます。"));
+    p.appendChild(s); return;
+  }
+  const sect = el("div", "sect");
+  sect.appendChild(el("span", "stencil", KIND[n.kind].ja));
+  p.appendChild(sect);
+
+  sect.appendChild(field("名前", n.title, v => n.title = v));
+  if (n.kind === "gate") {
+    sect.appendChild(area("何を承認するか", n.job, v => n.job = v,
+      "ここで実行は一度止まり、図面が2枚に割れます。承認後の仕事は別のワークフローになります。"));
+  } else {
+    sect.appendChild(area("仕事の中身（そのままAIへの指示になる）", n.job, v => n.job = v,
+      n.kind === "verify" ? "空のままで構いません。下の観点から検証者への指示文を組み立てます。"
+        : n.kind === "reduce" ? "整理はコードで動くので、AIへの指示は要りません。" : null));
+
+    if (n.kind === "fanout")
+      sect.appendChild(area("並列で回す観点（1行1件）", n.items.join("\n"),
+        v => n.items = v.split("\n").map(s => s.trim()).filter(Boolean),
+        `同時に走ります。実行側の同時実行上限は16です。`));
+
+    if (n.kind === "verify") {
+      sect.appendChild(sel_("検証する相手", n.target, S.nodes.filter(x => x.id !== n.id && x.kind !== "gate")
+        .map(x => [x.id, x.title || KIND[x.kind].ja]), v => n.target = v));
+      sect.appendChild(field("観点（角度を変える）", n.lens, v => n.lens = v));
+      sect.appendChild(note("この検証者には作業者の会話履歴を渡しません。完成物と基準だけを渡し、"
+        + "「間違っている理由を優先して探せ」と指示するコードを生成します。"));
+    }
+
+    if (n.kind === "reduce") {
+      sect.appendChild(check("件数を確認する", n.countCheck, v => n.countCheck = v,
+        "予定入力数と実際の入力数を突き合わせ、欠けていれば INCOMPLETE を立てます"));
+      sect.appendChild(note("整理はLLMを呼ばず素のJavaScriptで生成します。重複削除・件数確認は"
+        + "その方が安く速く確実です。"));
+    }
+
+    /* 契約 */
+    const cs = el("div", "sect");
+    cs.appendChild(el("span", "stencil", "契約 — OUTPUT"));
+    cs.appendChild(el("p", "hint", "次のノードが迷わず読める形。文章の美しさは要りません。"));
+    n.outputs.forEach((o, i) => {
+      const row = el("div", "pair");
+      row.appendChild(inp(o.name, "項目名", v => o.name = v));
+      row.appendChild(sel_(null, o.type, [["string", "string"], ["number", "number"],
+        ["boolean", "boolean"], ["array", "array"]], v => o.type = v, true));
+      const x = el("button", "mini", "×");
+      x.onclick = () => { n.outputs.splice(i, 1); render(); };
+      row.appendChild(x);
+      cs.appendChild(row);
+    });
+    const add = el("button", "add", "＋ 項目");
+    add.onclick = () => { n.outputs.push({ name: "", type: "string" }); render(); };
+    cs.appendChild(add);
+    cs.appendChild(area("失敗したとき", n.fail, v => n.fail = v,
+      "例: 公式情報を確認できない場合は、推測せず status を unverified にする"));
+    p.appendChild(cs);
+  }
+
+  /* 依存 */
+  const ds = el("div", "sect");
+  ds.appendChild(el("span", "stencil", "エッジ — 依存"));
+  ds.appendChild(el("p", "hint", "この仕事は、本当にその結果を必要としますか。必要ないなら外してください。同じ段に並んで同時に走ります。"));
+  const wrap = el("div", "deps");
+  S.nodes.filter(x => x.id !== n.id).forEach(x => {
+    const t = el("button", "dep" + (n.deps.includes(x.id) ? " on" : ""), x.title || KIND[x.kind].ja);
+    t.onclick = () => {
+      const i = n.deps.indexOf(x.id);
+      i < 0 ? n.deps.push(x.id) : n.deps.splice(i, 1);
+      n.edgeChecked = false; render();
+    };
+    wrap.appendChild(t);
+  });
+  ds.appendChild(wrap);
+  if (n.deps.length)
+    ds.appendChild(check("偽のエッジを検査した", n.edgeChecked, v => n.edgeChecked = v,
+      "残した矢印は、直前の結果が本当に要るものだけ"));
+  if (n.kind !== "gate")
+    ds.appendChild(check("不可逆な行動を含む", n.irreversible, v => n.irreversible = v,
+      "公開・送信・決済・削除・本番反映。手前に人間ゲートが要ります"));
+  p.appendChild(ds);
+
+  const del = el("button", "add danger", "この部品を外す");
+  del.onclick = () => {
+    S.nodes = S.nodes.filter(x => x.id !== n.id);
+    S.nodes.forEach(x => { x.deps = x.deps.filter(d => d !== n.id); if (x.target === n.id) x.target = ""; });
+    sel = null; render();
+  };
+  p.appendChild(del);
+}
+
+function field(label, val, on) {
+  const l = el("label", "f"); l.appendChild(el("span", "stencil", label));
+  l.appendChild(inp(val, "", on)); return l;
+}
+function inp(val, ph, on) {
+  const i = el("input", "in"); i.value = val || ""; i.placeholder = ph || "";
+  i.oninput = () => { on(i.value); scheduleRender(); }; return i;
+}
+function area(label, val, on, hint) {
+  const l = el("label", "f"); l.appendChild(el("span", "stencil", label));
+  const t = el("textarea", "in"); t.value = val || "";
+  t.oninput = () => { on(t.value); scheduleRender(); };
+  l.appendChild(t);
+  if (hint) l.appendChild(el("small", "hint", hint));
+  return l;
+}
+function sel_(label, val, opts, on, bare) {
+  const s = el("select", "in");
+  if (!bare) s.appendChild(el("option", null, "—")).value = "";
+  opts.forEach(([v, t]) => { const o = el("option", null, t); o.value = v; s.appendChild(o); });
+  s.value = val || "";
+  s.onchange = () => { on(s.value); render(); };
+  if (bare) return s;
+  const l = el("label", "f"); l.appendChild(el("span", "stencil", label)); l.appendChild(s); return l;
+}
+function check(label, val, on, sub) {
+  const l = el("label", "chk");
+  const i = el("input"); i.type = "checkbox"; i.checked = !!val;
+  i.onchange = () => { on(i.checked); render(); };
+  l.appendChild(i);
+  const s = el("span", null, label);
+  if (sub) s.appendChild(el("small", null, sub));
+  l.appendChild(s); return l;
+}
+function note(t) { return el("p", "hint", t); }
+
+let rt = null;
+function scheduleRender() { clearTimeout(rt); rt = setTimeout(render, 260); }
+
+function drawAnchors() {
+  const w = $("#anchors"); w.textContent = "";
+  S.anchors.forEach((a, i) => {
+    const row = el("div", "pair"); row.style.gridTemplateColumns = "1fr 26px";
+    row.appendChild(inp(a, "例: テストが通った / 入金された", v => S.anchors[i] = v));
+    const x = el("button", "mini", "×");
+    x.onclick = () => { S.anchors.splice(i, 1); render(); };
+    row.appendChild(x); w.appendChild(row);
+  });
+}
+
+function drawTitleBlock() {
+  const block = findings.filter(f => !f.warn), warn = findings.filter(f => f.warn);
+  const set = (id, txt, cls) => {
+    const n = $(id); n.querySelector("b").textContent = txt;
+    n.className = "tb" + (cls ? " " + cls : "");
+  };
+  set("#tb-findings", block.length ? `${block.length}件` : warn.length ? `注意${warn.length}` : "済",
+    block.length ? "flag" : "pass");
+  const ac = S.anchors.filter(a => a.trim()).length;
+  set("#tb-anchor", ac ? `${ac}件` : "未", ac ? "pass" : "flag");
+  set("#tb-cap", S.caps.max ? `${estimate()} / ${S.caps.max}` : "未", S.caps.max ? "" : "flag");
+  set("#tb-gate", `${segments().length || 1}枚`);
+
+  const list = $("#tb-list"); list.textContent = "";
+  [...block, ...warn].forEach(f => {
+    const b = el("button", "finding" + (f.warn ? " warn" : ""));
+    b.appendChild(el("code", null, f.code));
+    b.appendChild(el("span", null, f.msg));
+    b.onclick = () => { if (f.node) { sel = f.node.id; render(); } };
+    list.appendChild(b);
+  });
+  if (!findings.length && S.nodes.length)
+    list.appendChild(el("div", "finding", "指摘なし。出図できます。"));
+
+  const btn = $("#btn-issue");
+  btn.disabled = block.length > 0 || !S.nodes.length;
+  btn.textContent = block.length ? `出図不可 ${block.length}` : "出図";
+}
+
+/* ══ コード生成 ══════════════════════════════════════════ */
+function schemaOf(n) {
+  const outs = n.outputs.filter(o => o.name.trim());
+  const props = {}; outs.forEach(o => props[o.name.trim()] = { type: o.type });
+  return { type: "object", required: outs.map(o => o.name.trim()), properties: props };
+}
+function promptOf(n) {
+  const L = [];
+  L.push(n.job.trim());
+  L.push("");
+  L.push("GOAL: " + S.goal.trim());
+  if (S.anchors.filter(Boolean).length) {
+    L.push("");
+    L.push("ANCHOR — 何をもって正しいとするか:");
+    S.anchors.filter(Boolean).forEach(a => L.push("- " + a));
+  }
+  if (n.fail.trim()) { L.push(""); L.push("FAIL: " + n.fail.trim()); }
+  return L.join("\n");
+}
+function verifyPrompt(n, t) {
+  return [
+    "あなたは作成者ではなく、独立した検証者です。",
+    "作成者の推論や会話履歴は参照しません。渡された完成物と基準だけで判断します。",
+    "",
+    `観点: ${n.lens.trim() || "正確性"}`,
+    n.job.trim(),
+    "",
+    "以下の主張が間違っている可能性を優先して探してください。",
+    "1. 主張は出典によって本当に支持されているか",
+    "2. 情報は現在も有効か",
+    "3. 出典は実在し、該当内容を含んでいるか",
+    "4. 数字、日付、固有名詞に矛盾がないか",
+    "5. 推測が事実として書かれていないか",
+    "",
+    "確認できない場合は refuted ではなく unverified にします。",
+    "",
+    `対象（${t ? (t.title || t.id) : "?"} の出力）:`,
+    "${JSON.stringify(item)}",
+  ].join("\n");
+}
+
+function generate() {
+  const segs = segments();
+  return segs.map((seg, i) => {
+    const nm = segs.length > 1 ? `${S.name}-${i + 1}` : S.name;
+    const phases = [...new Set(seg.map(n => KIND[n.kind].phase).filter(p => p !== "整理"))];
+    const L = [];
+    L.push("/* GraphFlow で作成した図面です。設計の真実源は同梱の .graphflow.json です。");
+    L.push("   手で直すと次回の出図で上書きされます。図面側を直してください。 */");
+    L.push("export const meta = {");
+    L.push(`  name: ${jstr(nm)},`);
+    L.push(`  description: ${jstr(S.goal || S.name)},`);
+    L.push("  phases: [" + phases.map(p => `{ title: ${jstr(p)} }`).join(", ") + "],");
+    L.push("}");
+    L.push("");
+    if (segs.length > 1) {
+      L.push(`// 図面 ${i + 1}/${segs.length}。実行中に人間の承認は挟めないため、`);
+      L.push("// 人間ゲートごとにワークフローを分けています。");
+      if (i > 0) L.push(`// 前の図面（${S.name}-${i}）の結果を args で受け取ります。`);
+      L.push("");
+    }
+    if (S.anchors.filter(Boolean).length) {
+      L.push("// アンカー（AIの合意ではなく現実の証拠）:");
+      S.anchors.filter(Boolean).forEach(a => L.push("//   - " + a));
+      L.push("");
+    }
+    L.push(`const CAP = ${S.caps.max}   // 総エージェント数の上限`);
+    L.push("");
+
+    const done = new Set();
+    for (const n of seg) {
+      const v = "r_" + n.id;
+      const dep = n.deps.filter(d => done.has(d)).map(d => "r_" + d);
+      const ctx = dep.length
+        ? `\n\n前段の結果:\n` + dep.map(d => "${JSON.stringify(" + d + ")}").join("\n")
+        : "";
+
+      // 整理はエージェントを立てないので進捗の節を作らない
+      if (n.kind !== "reduce") L.push(`phase(${jstr(KIND[n.kind].phase)})`);
+
+      if (n.kind === "fanout") {
+        const items = n.items.filter(Boolean);
+        L.push(`const ${v}_items = ${JSON.stringify(items, null, 2).replace(/\n/g, "\n")}`);
+        L.push(`const ${v} = (await parallel(${v}_items.map((angle, i) => () =>`);
+        L.push(`  agent(\`${promptOf(n).replace(/`/g, "\\`")}\n\n観点: \${angle}${ctx}\`, {`);
+        L.push(`    label: \`調査:\${angle}\`,`);
+        L.push(`    phase: ${jstr(KIND[n.kind].phase)},`);
+        L.push(`    schema: ${JSON.stringify(schemaOf(n))},`);
+        L.push("  })")
+        L.push("))).filter(Boolean)");
+        L.push(`log(\`${n.title || "調査"}: \${${v}.length}/\${${v}_items.length} 件が返りました\`)`);
+      }
+      else if (n.kind === "reduce") {
+        const src = dep[0] || "[]";
+        L.push(`// 整理はLLMを呼びません。重複削除と件数確認は素のコードの方が安く速く確実です。`);
+        L.push(`const ${v}_in = [${dep.join(", ")}].flat().filter(Boolean)`);
+        L.push(`const ${v}_seen = new Set()`);
+        L.push(`const ${v} = ${v}_in.filter(x => {`);
+        L.push("  const k = JSON.stringify(x)");
+        L.push(`  if (${v}_seen.has(k)) return false`);
+        L.push(`  ${v}_seen.add(k); return true`);
+        L.push("})");
+        if (n.countCheck) {
+          // 「重複で減った」と「返ってこなかった」は別物。欠損だけを INCOMPLETE にする。
+          const fan = n.deps.filter(d => {
+            const dn = S.nodes.find(x => x.id === d);
+            return dn && dn.kind === "fanout";
+          });
+          L.push(`// 静かに失敗した1件を完成扱いにしないための件数確認`);
+          if (fan.length) {
+            L.push(`const ${v}_expected = ${fan.map(d => `r_${d}_items.length`).join(" + ")}`);
+            L.push(`const ${v}_returned = ${fan.map(d => `r_${d}.length`).join(" + ")}`);
+          } else {
+            L.push(`const ${v}_expected = ${v}_in.length`);
+            L.push(`const ${v}_returned = ${v}_in.length`);
+          }
+          L.push(`const ${v}_missing = ${v}_expected - ${v}_returned`);
+          L.push(`const ${v}_status = ${v}_missing === 0 ? "OK" : "INCOMPLETE"`);
+          L.push(`log(\`整理: 予定 \${${v}_expected} / 実際 \${${v}_returned}\``);
+          L.push(`  + \` / 欠損 \${${v}_missing} / 状態 \${${v}_status} — 重複を除いて \${${v}.length}件\`)`);
+          L.push(`if (${v}_status === "INCOMPLETE") log("⚠ 返らなかった仕事があります。この結果を完成として扱わないでください。")`);
+        }
+        void src;
+      }
+      else if (n.kind === "verify") {
+        const t = S.nodes.find(x => x.id === n.target);
+        const tv = t ? "r_" + t.id : "[]";
+        L.push(`// 検証者には作業者の会話履歴を渡しません。完成物と基準だけを渡します。`);
+        L.push(`const ${v} = (await parallel([${tv}].flat().filter(Boolean).map((item, i) => () =>`);
+        L.push(`  agent(\`${verifyPrompt(n, t).replace(/`/g, "\\`")}\`, {`);
+        L.push(`    label: \`検証:\${i + 1}\`,`);
+        L.push(`    phase: "検証",`);
+        L.push(`    schema: { type: "object", required: ["verdict", "reason"], properties: {`);
+        L.push(`      verdict: { type: "string", enum: ["KEEP", "DROP", "UNVERIFIED"] },`);
+        L.push(`      reason: { type: "string" },`);
+        L.push(`      needed: { type: "string" } } },`);
+        L.push("  }).then(v => ({ item, ...v }))");
+        L.push("))).filter(Boolean)");
+        L.push(`const ${v}_kept = ${v}.filter(x => x.verdict === "KEEP")`);
+        L.push(`log(\`検証: KEEP \${${v}_kept.length} / DROP \${${v}.filter(x=>x.verdict==="DROP").length} / UNVERIFIED \${${v}.filter(x=>x.verdict==="UNVERIFIED").length}\`)`);
+      }
+      else {
+        const kept = dep.map(d => {
+          const dn = S.nodes.find(x => "r_" + x.id === d);
+          return dn && dn.kind === "verify" ? d + "_kept" : d;
+        });
+        const ctx2 = kept.length
+          ? `\n\n使ってよい材料（検証を通ったものだけ）:\n` + kept.map(d => "${JSON.stringify(" + d + ")}").join("\n")
+          : "";
+        L.push(`const ${v} = await agent(\`${promptOf(n).replace(/`/g, "\\`")}${ctx2}\`, {`);
+        L.push(`  label: ${jstr(n.title || KIND[n.kind].ja)},`);
+        L.push(`  phase: ${jstr(KIND[n.kind].phase)},`);
+        L.push(`  schema: ${JSON.stringify(schemaOf(n))},`);
+        L.push("})");
+      }
+      L.push("");
+      done.add(n.id);
+    }
+
+    if (seg.gate) {
+      L.push("// ── 人間ゲート ──────────────────────────────");
+      L.push(`// ${seg.gate.title || "承認"}`);
+      if (seg.gate.job.trim()) seg.gate.job.trim().split("\n").forEach(x => L.push("// " + x));
+      L.push("// 実行中に人間の入力は挟めません。ここで一度止め、");
+      L.push(`// 承認できたら /${S.name}-${i + 2} を人が起動します。`);
+      L.push("");
+    }
+
+    const last = seg[seg.length - 1];
+    L.push(`return { result: r_${last.id}, cap: CAP }`);
+    return { file: nm + ".js", code: L.join("\n") };
+  });
+}
+
+/* ══ 出図 ══════════════════════════════════════════════ */
+let tabs = [], cur = 0;
+function issue() {
+  const gen = generate();
+  tabs = [...gen, { file: S.name + ".graphflow.json", code: JSON.stringify(S, null, 2) }];
+  cur = 0; drawDialog(); $("#dlg").showModal();
+}
+function drawDialog() {
+  const t = $("#dlg-tabs"); t.textContent = "";
+  tabs.forEach((x, i) => {
+    const b = el("button", "tab" + (i === cur ? " on" : ""), x.file);
+    b.onclick = () => { cur = i; drawDialog(); };
+    t.appendChild(b);
+  });
+  $("#dlg-pre").textContent = tabs[cur].code;
+  $("#dlg-msg").textContent = "";
+  const split = tabs.length > 2 ? `人間ゲートで ${tabs.length - 1} 枚に割れています。` : "";
+  $("#dlg-path").textContent = split + (window.__GRAPHFLOW_LOCAL__
+    ? "" : ".js を .claude/workflows/ に置くと /図面名 で起動できます");
+  $("#dlg-save").hidden = !window.__GRAPHFLOW_LOCAL__;
+}
+
+/* ══ ひな形 ══════════════════════════════════════════════ */
+const TEMPLATES = {
+  "競合調査": () => build("competitor-scan", "経営者が商品設計と販売戦略を決められる水準の競合調査をまとめる",
+    ["公式サイトの料金ページ（一次情報）", "実際に問い合わせて得た回答"], { max: 12, conc: 5 }, [
+      ["fanout", "角度を分けて調べる", "指定された観点で日本国内の競合サービスを調べます。すべての発見に出典URL・公開日・確認日・確信度を付けます。出典のない主張は書きません。",
+        ["競合サービスと料金", "法人担当者の悩み", "利用者の不満", "2026年のトレンド", "差別化の余地"],
+        [["finding", "string"], ["source_url", "string"], ["published_at", "string"], ["confidence", "number"]],
+        "公式情報を確認できない場合は、推測せず status を unverified にする"],
+      ["reduce", "重複と同一ソースを畳む", "", null, [["kept", "number"]], ""],
+      ["verify", "出典が実在するか確かめる", "", null, [["verdict", "string"]], "確認できないものは unverified にする", "出典の実在と鮮度"],
+      ["synthesize", "調査報告書にまとめる", "検証を通った情報だけを使い、市場機会・顧客課題・競合の弱点・推奨商品・販売戦略をまとめます。",
+        null, [["report", "string"], ["opportunities", "array"]], "材料が足りない項目は「材料不足」と明記する"],
+    ]),
+  "記事制作": () => build("article-build", "出典の付いた1万字の記事を、密度を落とさずに仕上げる",
+    ["一次情報（公式ドキュメント・原典）", "実際に手元で再現できた結果"], { max: 14, conc: 5 }, [
+      ["fanout", "材料を集める", "指定された角度から記事の材料を集めます。すべての主張に出典URLと公開日を付けます。",
+        ["公式情報", "海外事例", "科学的根拠", "反対意見", "日本市場への影響"],
+        [["claim", "string"], ["source_url", "string"], ["published_at", "string"]],
+        "出典を確認できない主張は採用せず、落とした理由を残す"],
+      ["reduce", "出典のない主張を落とす", "", null, [["kept", "number"]], ""],
+      ["verify", "事実を確認する", "", null, [["verdict", "string"]], "確認できないものは unverified にする", "数字・日付・固有名詞"],
+      ["synthesize", "本文を書く", "検証を通った材料だけで本文を書きます。誇張せず、断定できないことは断定しません。",
+        null, [["body", "string"], ["word_count", "number"]], "材料が足りない節は書かず、不足を明記する"],
+      ["gate", "公開してよいか人が決める", "公開は不可逆です。ここで一度止まります。"],
+    ]),
+  "営業提案": () => build("sales-proposal", "商談で使える提案書一式を、推測と事実を混ぜずに作る",
+    ["顧客が実際に発言・提供した情報", "公開されている一次情報"], { max: 10, conc: 5 }, [
+      ["fanout", "顧客まわりを調べる", "指定された観点で顧客企業を調べます。顧客が実際に提供した情報と、こちらが推測した情報を必ず分けて書きます。",
+        ["事業内容と直近の動き", "業界の課題", "競合の動向", "顧客の過去の発言", "導入の障壁"],
+        [["finding", "string"], ["is_from_customer", "boolean"], ["source_url", "string"]],
+        "出典を確認できない場合は is_from_customer を false にし status を unverified にする"],
+      ["reduce", "重複を畳む", "", null, [["kept", "number"]], ""],
+      ["verify", "推測が事実として書かれていないか見る", "", null, [["verdict", "string"]], "判断できないものは unverified にする", "推測と事実の混同"],
+      ["synthesize", "提案書と想定問答を作る", "検証を通った材料だけで、提案・見積の前提・商談質問・反論対応を作ります。推測に基づく箇所には印を付けます。",
+        null, [["proposal", "string"], ["questions", "array"]], "顧客未確認の前提は必ず「未確認」と明記する"],
+      ["gate", "顧客に送ってよいか人が決める", "外部送信は不可逆です。ここで一度止まります。"],
+    ]),
+};
+
+function build(name, goal, anchors, caps, rows) {
+  seq = 0;
+  const s = blank();
+  s.name = name; s.goal = goal; s.anchors = anchors; s.caps = caps;
+  let prev = null;
+  for (const [kind, title, job, items, outs, fail, lens] of rows) {
+    const n = newNode(kind);
+    n.title = title; n.job = job || ""; n.deps = prev ? [prev.id] : [];
+    n.edgeChecked = true;
+    if (items) n.items = items;
+    if (outs) n.outputs = outs.map(([nm, ty]) => ({ name: nm, type: ty }));
+    if (fail) n.fail = fail;
+    if (kind === "verify") { n.target = prev ? prev.id : ""; n.lens = lens || ""; }
+    if (kind === "gate") n.irreversible = false;
+    s.nodes.push(n); prev = n;
+  }
+  return s;
+}
+
+/* ══ 配線 ══════════════════════════════════════════════ */
+document.querySelectorAll(".part").forEach(b => b.onclick = () => {
+  const n = newNode(b.dataset.k);
+  S.nodes.push(n); sel = n.id; render();
+  document.querySelector(".col.right").scrollTop = 0;
+});
+$("#f-name").oninput = e => { S.name = e.target.value.trim(); scheduleRender(); };
+$("#f-goal").oninput = e => { S.goal = e.target.value; scheduleRender(); };
+$("#f-cap").oninput = e => { S.caps.max = +e.target.value || 0; scheduleRender(); };
+$("#f-conc").oninput = e => { S.caps.conc = +e.target.value || 0; scheduleRender(); };
+$("#btn-anchor").onclick = () => { S.anchors.push(""); render(); };
+$("#btn-issue").onclick = issue;
+$("#dlg-x").onclick = () => $("#dlg").close();
+
+const selT = $("#sel-tmpl");
+Object.keys(TEMPLATES).forEach(k => {
+  const o = el("option", null, k); o.value = k; selT.appendChild(o);
+});
+selT.onchange = () => {
+  const k = selT.value;
+  selT.value = "";
+  if (!k) return;
+  if (S.nodes.length && !confirm("いま描いている図面は消えます。ひな形を読み込みますか？")) return;
+  S = TEMPLATES[k](); sel = null; render();
+};
+
+$("#btn-load").onclick = () => {
+  const inp = el("input"); inp.type = "file"; inp.accept = ".json,application/json";
+  inp.onchange = () => {
+    const f = inp.files[0]; if (!f) return;
+    const r = new FileReader();
+    r.onload = () => {
+      try {
+        const d = JSON.parse(r.result);
+        if (!d.nodes) throw new Error("nodes がありません");
+        S = d; seq = S.nodes.length;
+        S.nodes.forEach(n => { const m = /^n(\d+)$/.exec(n.id); if (m) seq = Math.max(seq, +m[1]); });
+        sel = null; render();
+      } catch (e) { alert("この図面は読めません: " + e.message); }
+    };
+    r.readAsText(f);
+  };
+  inp.click();
+};
+
+$("#dlg-copy").onclick = async () => {
+  try { await navigator.clipboard.writeText(tabs[cur].code); $("#dlg-msg").textContent = "コピーしました"; }
+  catch { $("#dlg-msg").textContent = "コピーできませんでした。手で選択してください"; }
+};
+$("#dlg-dl").onclick = () => {
+  const b = new Blob([tabs[cur].code], { type: "text/plain" });
+  const a = el("a"); a.href = URL.createObjectURL(b); a.download = tabs[cur].file; a.click();
+  URL.revokeObjectURL(a.href); $("#dlg-msg").textContent = "保存しました";
+};
+$("#dlg-save").onclick = async () => {
+  $("#dlg-msg").textContent = "保存中…";
+  try {
+    const res = await fetch("/write", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ files: tabs.map(t => ({ name: t.file, code: t.code })) }),
+    });
+    const j = await res.json();
+    if (!res.ok) throw new Error(j.error || res.statusText);
+    $("#dlg-msg").textContent = `${j.written.length}件を保存しました → /${S.name}`;
+  } catch (e) { $("#dlg-msg").textContent = "保存できませんでした: " + e.message; }
+};
+
+$("#btn-theme").onclick = () => {
+  const cur = document.documentElement.getAttribute("data-theme");
+  const next = cur === "dark" ? "light" : cur === "light" ? "" : "dark";
+  next ? document.documentElement.setAttribute("data-theme", next)
+       : document.documentElement.removeAttribute("data-theme");
+};
+
+/* graphflow コマンドから図面を渡された場合はそれを開く */
+if (window.__GRAPHFLOW_PRELOAD__ && window.__GRAPHFLOW_PRELOAD__.nodes) {
+  S = window.__GRAPHFLOW_PRELOAD__;
+  S.nodes.forEach(n => { const m = /^n(\d+)$/.exec(n.id); if (m) seq = Math.max(seq, +m[1]); });
+}
+
+render();
+</script>
+</body>
+</html>

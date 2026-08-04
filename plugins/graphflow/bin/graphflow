@@ -1,0 +1,167 @@
+#!/usr/bin/env node
+/**
+ * GraphFlow 検図盤 — ローカルサーバー
+ *
+ * web/index.html を localhost で配り、GUI からの書き出しを
+ * 起動ディレクトリ配下の .claude/workflows/ にだけ書き込む。
+ *
+ * 依存パッケージなし。Node 18 以降。
+ */
+"use strict";
+
+const http = require("http");
+const fs = require("fs");
+const path = require("path");
+const { execFile } = require("child_process");
+
+const HERE = __dirname;
+const HTML = path.join(HERE, "..", "web", "index.html");
+
+/* ── 引数 ───────────────────────────────────────── */
+const argv = process.argv.slice(2);
+let port = 7391;
+let openFile = null;
+for (let i = 0; i < argv.length; i++) {
+  const a = argv[i];
+  if (a === "--port" || a === "-p") port = parseInt(argv[++i], 10);
+  else if (a === "--help" || a === "-h") {
+    console.log(`GraphFlow 検図盤
+
+  graphflow [図面.graphflow.json] [--port 7391]
+
+引数なしで空の図面を開きます。書き出し先は、このコマンドを実行した
+ディレクトリ配下の .claude/workflows/ に限定されます。`);
+    process.exit(0);
+  } else if (!a.startsWith("-")) openFile = a;
+}
+if (!Number.isInteger(port) || port < 1 || port > 65535) {
+  console.error("--port の値が不正です");
+  process.exit(1);
+}
+
+const ROOT = process.cwd();
+const OUT = path.join(ROOT, ".claude", "workflows");
+
+if (!fs.existsSync(HTML)) {
+  console.error(`GUI が見つかりません: ${HTML}`);
+  process.exit(1);
+}
+
+/* 起動時に読み込む図面 */
+let preload = null;
+if (openFile) {
+  try {
+    preload = JSON.parse(fs.readFileSync(path.resolve(ROOT, openFile), "utf8"));
+  } catch (e) {
+    console.error(`図面を読めません (${openFile}): ${e.message}`);
+    process.exit(1);
+  }
+}
+
+/* ── 書き込み先の検査 ─────────────────────────────
+   GUI から来た名前をそのまま信用しない。 */
+function safeTarget(name) {
+  if (typeof name !== "string" || !name) return null;
+  if (name !== path.basename(name)) return null;              // 区切り文字を含む
+  if (!/^[a-z0-9][a-z0-9._-]*$/i.test(name)) return null;     // 想定外の文字
+  if (!/\.(js|json)$/.test(name)) return null;                // 拡張子を限定
+  const full = path.join(OUT, name);
+  const rel = path.relative(OUT, full);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) return null;
+  return full;
+}
+
+function body(req) {
+  return new Promise((resolve, reject) => {
+    let n = 0;
+    const parts = [];
+    req.on("data", c => {
+      n += c.length;
+      if (n > 4 * 1024 * 1024) { reject(new Error("送信データが大きすぎます")); req.destroy(); return; }
+      parts.push(c);
+    });
+    req.on("end", () => resolve(Buffer.concat(parts).toString("utf8")));
+    req.on("error", reject);
+  });
+}
+
+const json = (res, code, obj) => {
+  res.writeHead(code, { "content-type": "application/json; charset=utf-8" });
+  res.end(JSON.stringify(obj));
+};
+
+/* ── サーバー ───────────────────────────────────── */
+const server = http.createServer(async (req, res) => {
+  // ローカル以外からの接続は受けない
+  const ra = req.socket.remoteAddress || "";
+  if (!/^(::1|::ffff:127\.|127\.)/.test(ra)) { res.writeHead(403); res.end(); return; }
+
+  const url = new URL(req.url, "http://localhost");
+
+  if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
+    let html;
+    try { html = fs.readFileSync(HTML, "utf8"); }
+    catch (e) { res.writeHead(500); res.end(String(e.message)); return; }
+    const boot = "<script>window.__GRAPHFLOW_LOCAL__=true;"
+      + (preload ? `window.__GRAPHFLOW_PRELOAD__=${JSON.stringify(preload)};` : "")
+      + "</script>";
+    html = html.replace("</head>", boot + "</head>");
+    res.writeHead(200, {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store",
+    });
+    res.end(html);
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/write") {
+    let payload;
+    try { payload = JSON.parse(await body(req)); }
+    catch (e) { return json(res, 400, { error: "読み取れない送信内容です: " + e.message }); }
+
+    const files = Array.isArray(payload && payload.files) ? payload.files : null;
+    if (!files || !files.length) return json(res, 400, { error: "書き出すファイルがありません" });
+    if (files.length > 32) return json(res, 400, { error: "ファイル数が多すぎます" });
+
+    const targets = [];
+    for (const f of files) {
+      const t = safeTarget(f && f.name);
+      if (!t) return json(res, 400, { error: `使えないファイル名です: ${f && f.name}` });
+      if (typeof f.code !== "string") return json(res, 400, { error: `中身がありません: ${f.name}` });
+      targets.push([t, f.code]);
+    }
+
+    try {
+      fs.mkdirSync(OUT, { recursive: true });
+      // 既存を黙って消さない。上書きになるものは控えて返す。
+      const overwritten = targets.filter(([t]) => fs.existsSync(t)).map(([t]) => path.basename(t));
+      for (const [t, code] of targets) fs.writeFileSync(t, code, "utf8");
+      const written = targets.map(([t]) => path.relative(ROOT, t));
+      written.forEach(w => console.log(`  書き出し: ${w}`));
+      if (overwritten.length) console.log(`  （上書き: ${overwritten.join(", ")}）`);
+      return json(res, 200, { written, overwritten });
+    } catch (e) {
+      return json(res, 500, { error: e.message });
+    }
+  }
+
+  res.writeHead(404); res.end();
+});
+
+server.on("error", e => {
+  if (e.code === "EADDRINUSE") {
+    console.error(`ポート ${port} は既に使われています。--port で別の番号を指定してください。`);
+  } else console.error(e.message);
+  process.exit(1);
+});
+
+server.listen(port, "127.0.0.1", () => {
+  const url = `http://127.0.0.1:${port}/`;
+  console.log(`GraphFlow 検図盤: ${url}`);
+  console.log(`書き出し先: ${path.relative(ROOT, OUT) || OUT}`);
+  console.log("止めるときは Ctrl+C");
+  const cmd = process.platform === "darwin" ? "open"
+    : process.platform === "win32" ? "cmd" : "xdg-open";
+  const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
+  execFile(cmd, args, () => { /* 開けなくてもURLは出ているので黙って続ける */ });
+});
