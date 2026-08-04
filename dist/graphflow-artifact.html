@@ -1086,8 +1086,8 @@ function drawInspector() {
       "同じ段で2本以上が同時に走るとき、機械には判断できないので人が答えます"));
     if (n.fileChecked)
       ds.appendChild(check("ファイルを書き換える", n.writesFiles, v => n.writesFiles = v,
-        "ONにすると、この仕事だけ別の作業コピー（worktree）で動かします。"
-        + "他の仕事と同じファイルを奪い合わなくなります"));
+        "同じ段に2本以上あるときだけ、別の作業コピー（worktree）で動かします。"
+        + "1本しか走らない段では分離しません（分離すると修正が本物のファイルに届かないため）"));
   }
   if (n.kind !== "gate")
     ds.appendChild(check("不可逆な行動を含む", n.irreversible, v => n.irreversible = v,
@@ -1367,6 +1367,17 @@ function generate() {
     seg.forEach(n => (groups[rk[n.id]] ||= []).push(n));
     const done = new Set();
 
+    /* 🔴 worktree 分離は「並列でファイルを奪い合う」ときだけ要る。
+       直列のノードに付けると、修正が使い捨ての作業コピーに入って
+       本物のリポジトリに届かない。同じ段に2本以上あるときだけ出す。 */
+    const 同時本数 = {};
+    S.nodes.forEach(x => {
+      if (x.kind === "gate" || x.kind === "reduce") return;
+      const w = x.kind === "fanout" ? Math.max(1, x.items.filter(Boolean).length) : 1;
+      同時本数[rk[x.id]] = (同時本数[rk[x.id]] || 0) + w;
+    });
+    const 分離が要る = n => n.writesFiles && (同時本数[rk[n.id]] || 0) > 1;
+
     const depsOf = n => n.deps.filter(d => done.has(d)).map(d => "r_" + d);
     // 🔴 ゲートをまたぐ依存は、この図面の中に相手がいない。
     //    黙って落とすと前の図面の結果が消えるので、args から受け取る。
@@ -1386,7 +1397,7 @@ function generate() {
           `    spawn(\`${promptOf(n)}\n\n対象: \${対象}${ctxOf(n)}\`, {`,
           `      label: \`\${対象}\`,`,
           `      phase: ${jstr(KIND[n.kind].phase)},`,
-          ...(n.writesFiles ? [`      isolation: "worktree",   // 同じファイルを奪い合わないよう、別の作業コピーで動かす`] : []),
+          ...(分離が要る(n) ? [`      isolation: "worktree",   // この段は同時に走るので、別の作業コピーで動かす`] : []),
           `      schema: ${JSON.stringify(schemaOf(n))},`,
           `    })`,
           `  )).then(a => a.filter(Boolean))`,
@@ -1430,7 +1441,7 @@ function generate() {
         `spawn(\`${promptOf(n)}${ctx2}\`, {`,
         `    label: ${jstr(n.title || KIND[n.kind].ja)},`,
         `    phase: ${jstr(KIND[n.kind].phase)},`,
-        ...(n.writesFiles ? [`    isolation: "worktree",   // 同じファイルを奪い合わないよう、別の作業コピーで動かす`] : []),
+        ...(分離が要る(n) ? [`    isolation: "worktree",   // この段は同時に走るので、別の作業コピーで動かす`] : []),
         `    schema: ${JSON.stringify(schemaOf(n))},`,
         `  })`,
       ].join("\n");
