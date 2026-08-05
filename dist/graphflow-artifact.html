@@ -315,6 +315,10 @@ dialog{
   padding:0;width:min(920px,94vw);max-height:88dvh;
 }
 dialog::backdrop{background:rgba(0,0,0,.55)}
+dialog#ask{width:min(440px,92vw)}
+.ask-bd{padding:16px 18px}
+.ask-bd p{margin:0 0 6px;font-size:13.5px;line-height:1.7}
+.ask-bd .hint{margin:0}
 .dlg-hd{display:flex;align-items:center;gap:14px;padding:11px 18px;border-bottom:1px solid var(--line);background:var(--panel)}
 .dlg-hd .stencil{flex:1}
 .tabs{display:flex;gap:0;border-bottom:1px solid var(--line);background:var(--panel);overflow-x:auto}
@@ -358,6 +362,7 @@ pre{
       aria-label="このフローが達成すること">
   </div>
   <div class="hd-spacer"></div>
+  <span class="saved" id="toast" role="status" aria-live="polite" hidden></span>
   <select class="ghost" id="sel-tmpl" aria-label="ひな形を読み込む"><option value="">ひな形…</option></select>
   <button class="ghost" id="btn-load">読込</button>
   <button class="ghost" id="btn-theme" title="明暗を切り替える">◐</button>
@@ -443,6 +448,18 @@ pre{
   </div>
 </dialog>
 
+<!-- 🔴 確認は自前で出す。ブラウザの confirm() はサンドボックスだと
+     ダイアログを出さずに false を返すので、「何も起きない」に化ける。 -->
+<dialog id="ask">
+  <div class="dlg-hd"><span class="stencil">確認</span></div>
+  <div class="ask-bd"><p id="ask-msg"></p><p class="hint" id="ask-sub"></p></div>
+  <div class="dlg-ft">
+    <span class="stencil"></span>
+    <button class="ghost" id="ask-no">やめる</button>
+    <button class="solid" id="ask-yes">読み込む</button>
+  </div>
+</dialog>
+
 <script>
 "use strict";
 const $ = s => document.querySelector(s);
@@ -457,6 +474,66 @@ const KIND = {
   verify:     { ja: "検証",     phase: "検証" },
   synthesize: { ja: "統合",     phase: "統合" },
   gate:       { ja: "人間ゲート", phase: "承認" },
+};
+
+/* 🔴 検証は「何を確かめるか」で問いが変わる。
+   全部を事実確認の物差しで測ると、文章の良し悪しを見る段に
+   「出典に支持されているか」と聞くことになり、検証が空を切る。
+   合否の語（KEEP / DROP / UNVERIFIED）は下流のコードが読むので変えない。
+   変えるのは「何を KEEP と呼ぶか」の中身だけ。 */
+const VKINDS = {
+  fact: {
+    ja: "事実として正しいか",
+    hint: "調べた材料・数字・出典を確かめる段",
+    asks: [
+      "主張は出典によって本当に支持されているか",
+      "情報は現在も有効か",
+      "出典は実在し、該当内容を含んでいるか",
+      "数字、日付、固有名詞に矛盾がないか",
+      "推測が事実として書かれていないか",
+    ],
+    keep: "出典に支持されていて、そのまま使える",
+    drop: "誤り・出典なし・出典と食い違う",
+  },
+  rule: {
+    ja: "決めた基準どおりか",
+    hint: "指摘した箇所が直ったか、規約・チェック項目に沿っているか見る段",
+    asks: [
+      "指摘された箇所が、指摘のとおりに直っているか",
+      "直したと言っているだけで、現物が変わっていない箇所はないか",
+      "直した結果、別の箇所が壊れていないか",
+      "基準のうち、触れられないまま残っている項目はないか",
+      "「おおむね直った」で済ませている箇所はないか",
+    ],
+    keep: "基準を満たしている",
+    drop: "基準を満たしていない（直っていない・別の箇所が壊れた）",
+  },
+  quality: {
+    ja: "読み物として成立しているか",
+    hint: "文章・体験の質を見る段。事実確認とは別の物差し",
+    asks: [
+      "読み手が最後まで読める流れになっているか",
+      "同じことを言い換えただけの段落が続いていないか",
+      "具体が無いまま、それらしい言葉で埋めた箇所はないか",
+      "書き手が実際には知らないことを、知っているように書いていないか",
+      "誰に向けた文章かが、途中で入れ替わっていないか",
+    ],
+    keep: "読み物として成立している",
+    drop: "成立していない（水増し・空虚・読み手が入れ替わる）",
+  },
+  repro: {
+    ja: "手元で再現できるか",
+    hint: "手順・コード・設定が実際に動くか見る段",
+    asks: [
+      "書かれた手順どおりに、実際に同じ結果になるか",
+      "前提として要るのに書かれていない条件はないか",
+      "動かしていないのに「動く」と書いている箇所はないか",
+      "環境が変わると壊れる箇所が、そう書かれているか",
+      "失敗したときにどうなるかが書かれているか",
+    ],
+    keep: "実際に再現できた",
+    drop: "再現できなかった",
+  },
 };
 
 let seq = 0;
@@ -509,6 +586,8 @@ function normalize(d) {
       id: n.id, kind: n.kind,
       title: String(n.title ?? ""), job: String(n.job ?? ""),
       items: n.kind === "fanout" ? (Array.isArray(n.items) ? n.items.map(String) : []) : null,
+      multi: n.kind === "fanout" ? !!n.multi : false,
+      each: Number.isFinite(+n.each) && +n.each >= 1 ? Math.floor(+n.each) : 3,
       outputs: Array.isArray(n.outputs)
         ? n.outputs.filter(o => o && typeof o.name === "string")
             .map(o => ({ name: o.name, type: OUT_TYPES.includes(o.type) ? o.type : "string" }))
@@ -518,7 +597,10 @@ function normalize(d) {
       edgeChecked: !!n.edgeChecked,
       irreversible: !!n.irreversible,
       countCheck: n.kind === "reduce" ? n.countCheck !== false : false,
+      dropEmpty: n.kind === "reduce" ? !!n.dropEmpty : false,
       target: typeof n.target === "string" ? n.target : "",
+      basis: Array.isArray(n.basis) ? n.basis.filter(x => typeof x === "string") : [],
+      vkind: n.kind === "verify" && VKINDS[n.vkind] ? n.vkind : "fact",
       lens: String(n.lens ?? ""),
       writesFiles: !!n.writesFiles,
       fileChecked: !!n.fileChecked,
@@ -527,6 +609,10 @@ function normalize(d) {
   // 存在しない相手を指す線と検証対象は捨てる（読んだ瞬間に落ちないため）
   s.nodes.forEach(n => {
     n.deps = [...new Set(n.deps.filter(dp => ids.has(dp) && dp !== n.id))];
+    n.basis = [...new Set(n.basis.filter(b => ids.has(b) && b !== n.id))];
+    /* 基準はその結果を読む＝依存でもある。線が無いと順番が保証されず、
+       まだ空のものを基準として読みに行く。 */
+    n.basis.forEach(b => { if (!n.deps.includes(b)) n.deps.push(b); });
     if (!ids.has(n.target)) n.target = "";
   });
   if (!ids.has(s.loop.from) || !ids.has(s.loop.to)) { s.loop.from = ""; s.loop.to = ""; }
@@ -571,13 +657,18 @@ function newNode(kind) {
     id: nid(), kind,
     title: "", job: "",
     items: kind === "fanout" ? [] : null,
+    multi: false,          // 1体が複数件返してよいか（既定は1体1件）
+    each: 3,               // 複数件返すとき、1体あたり何件返る想定か（見積りと空回しの目盛り）
     outputs: kind === "gate" ? [] : [{ name: "", type: "string" }],
     fail: "",
     deps,
     edgeChecked: false,
     irreversible: false,
     countCheck: kind === "reduce",
+    dropEmpty: false,     // 中身の空いた行を落とすか
     target: kind === "verify" ? (leaves.length === 1 ? leaves[0].id : "") : "",
+    basis: [],            // 判定の基準として、検証者の手元に渡すもの
+    vkind: "fact",        // 何を確かめる検証か
     lens: "",
     writesFiles: false,   // ファイルを書き換えるか
     fileChecked: false,   // 書き換えるかどうかを人が確かめたか
@@ -640,6 +731,37 @@ function inspect() {
         push("K-34", `「${at}」が自分より後ろ（または無関係）の「${byId[n.target].title || KIND[byId[n.target].kind].ja}」を検証しています。`
           + "検証は手前の段の結果にしか掛けられません", n);
       if (!n.lens.trim()) push("K-13", `「${at}」の観点が空です。3人が同じ角度で見ても独立にはなりません`, n);
+
+      /* 🔴 検証者は「検証する相手」しか読まない。基準が図面の中の別ノードにあるとき、
+         それを渡さないと、答案だけ見て採点しろと言っているのと同じになる。
+         事実確認は基準が外の世界（出典）にあるので、無くても成立する。 */
+      const 基準が要る = n.vkind === "rule" || n.vkind === "repro";
+      if (基準が要る && !n.basis.length)
+        push("K-37", `「${at}」は「${(VKINDS[n.vkind] || VKINDS.fact).ja}」を見る検証ですが、`
+          + `その基準が渡っていません。検証者は「検証する相手」の出力しか読まないので、`
+          + `何と照らすのかが手元にありません。右の「判定の基準として渡すもの」に、`
+          + `基準を出しているノード（指摘リストや仕様）を入れてください`, n);
+      for (const b of n.basis) {
+        if (!byId[b]) continue;
+        if (b === n.target)
+          push("K-39", `「${at}」の基準が、検証する相手と同じ「${byId[b].title || "?"}」です。`
+            + `相手の出力は既に渡っているので、基準としては何も足していません`, n, true);
+        else if (!reaches(n.id, b))
+          push("K-40", `「${at}」の基準「${byId[b].title || "?"}」は、この検証より後ろ（または無関係）にあります。`
+            + `まだ結果が出ていないものは基準にできません`, n);
+      }
+
+      /* 🔴 依存に入れれば渡ると読むのが自然だが、検証だけは渡らない。
+         実際、最初に使った人がここで詰まった（依存に「修正」を入れて、渡ると思っていた）。
+         人の読み方の方が自然なので、機械が気づいて言う。 */
+      const 渡らない依存 = n.deps.filter(d =>
+        byId[d] && d !== n.target && !n.basis.includes(d));
+      if (渡らない依存.length)
+        push("K-38", `「${at}」の依存にある`
+          + 渡らない依存.map(d => `「${byId[d].title || "?"}」`).join("・")
+          + `は、結果が検証者に渡りません（検証が読むのは「検証する相手」と「判定の基準」だけ）。`
+          + `中身を渡したいなら「判定の基準として渡すもの」に入れ、`
+          + `順番を待たせたいだけならそのままで構いません`, n, true);
     }
     if (n.irreversible) {
       const seg = segmentOf(n.id);
@@ -717,6 +839,44 @@ function inspect() {
             + `毎周おなじものを読むので、直しても判定が変わりません。`
             + `検証する相手を、繰り返しの中の仕事（直した結果が出るもの）に変えてください`, j);
       }
+      /* 🔴 直す仕事が「直す対象そのもの」を受け取っていないと、指摘だけを見て直すことになる。
+         現物が手元に無いので直しようがなく、毎周おなじ指摘が返って周回数だけが増える。
+         間接的に渡っている場合もあるので、止めずに警告にとどめる。 */
+      const 並び = order();
+      const 成果物か = x => x.kind === "single" || x.kind === "synthesize" || x.kind === "fanout";
+      const 帯の中 = 並び.filter(x => rk2[x.id] >= LR.a && rk2[x.id] <= LR.b && 成果物か(x));
+      const 直前 = 並び.filter(x => rk2[x.id] < LR.a && 成果物か(x)).slice(-1)[0];
+      /* 受け取るのは帯の先頭でよい。先頭が現物を持てば、その出力に載せて後ろへ運べる。
+         「最後のノードが受け取っているか」で見ると、正しい図まで警告してしまう。
+         🔴 直につながっているかではなく、たどり着けるかで見る。
+            間に整理をはさむ形（洗い出す → 畳む → 実施する）は正しいのに、
+            直線だけ見ていると「受け取っていない」と誤って言う。 */
+      const たどれる = (a, b, 見た = new Set()) => {
+        if (a === b) return true;
+        if (見た.has(a) || !byId[a]) return false;
+        見た.add(a);
+        return byId[a].deps.some(d => たどれる(d, b, 見た));
+      };
+      if (帯の中.length && 直前 && !帯の中.some(x => x.deps.some(d => たどれる(d, 直前.id))))
+        push("K-36", `繰り返しの中の仕事が、直す対象の「${直前.title || "?"}」を`
+          + `どれも受け取っていません。指摘だけが渡るので、現物が手元に無いまま直すことになります。`
+          + `繰り返しの入口の仕事（「${帯の中[0].title || "?"}」）の依存に足してください`, 帯の中[0], true);
+
+      /* 🔴 繰り返しの外にある成果物を、帯の後ろの仕事が直に受け取っていると、
+         2周目以降もそれは1周目のまま（外にあるので更新されない）。
+         最新版と初稿の両方を渡された側は、どちらを直すのか決められない。 */
+      const 外の成果物 = 並び.filter(x => rk2[x.id] < LR.a && 成果物か(x)).map(x => x.id);
+      for (const x of 帯の中) {
+        if (rk2[x.id] === LR.a) continue;          // 入口は現物を受け取ってよい
+        const 古いまま = x.deps.filter(d => 外の成果物.includes(d));
+        if (古いまま.length)
+          push("K-41", `「${x.title || "仕事"}」は繰り返しの中にありますが、`
+            + `繰り返しの外にある`
+            + 古いまま.map(d => `「${byId[d].title || "?"}」`).join("・")
+            + `を直に受け取っています。その中身は毎周おなじ（1周目のまま）なので、`
+            + `2周目以降は「最新の指摘」と「古い現物」を同時に渡されることになります。`
+            + `現物は繰り返しの入口から順に渡してください`, x);
+      }
       if (!S.loop.max) push("K-26", "繰り返しの最大周回数が未設定です。止まらなくなります", null);
       if (!S.loop.dry) push("K-27", "空回りの判定回数が未設定です。指摘が出なくなっても回り続けます", null);
       // 実行中に人の承認は挟めない＝ゲートをまたぐ繰り返しは動かせない
@@ -752,14 +912,37 @@ function inspect() {
   return f;
 }
 
+/* その段が何体ぶんの結果を下流に流すか。
+   🔴 検証は「上流から流れてきた件数」ぶん立つ。1体1件だと思って数えると、
+      1体が複数件返す段の下流で、実行時の体数が見積りを何倍にも上回る
+      （そして上限に当たって静かに切り捨てられる）。 */
+function 流す件数(n, 見た = new Set()) {
+  if (!n || 見た.has(n.id)) return 1;
+  見た.add(n.id);
+  const 上流 = () => n.deps.map(d => S.nodes.find(x => x.id === d))
+    .filter(Boolean).reduce((a, x) => a + 流す件数(x, 見た), 0) || 1;
+  if (n.kind === "fanout")
+    return Math.max(1, n.items.filter(Boolean).length) * (n.multi ? Math.max(1, n.each || 1) : 1);
+  if (n.kind === "reduce") return 上流();
+  if (n.kind === "verify") {
+    const t = S.nodes.find(x => x.id === n.target);
+    return t ? 流す件数(t, 見た) : 上流();
+  }
+  return 1;   // 単発・統合は1つにまとめる仕事
+}
+
 function estimate() {
   const LR = loopRange();
   const rk = LR ? ranks() : null;
   // 帯の中は最大周回数だけ繰り返し走る。見積りに掛けないと上限が意味を失う。
   const rounds = n => (LR && rk[n.id] >= LR.a && rk[n.id] <= LR.b) ? Math.max(1, S.loop.max || 1) : 1;
+  /* 並列は「対象の数だけ体が立つ」。1体が何件返そうと体数は変わらない。
+     検証は逆で、上流から流れてきた件数ぶん体が立つ。ここを取り違えると数が合わない。 */
   return S.nodes.reduce((a, n) => a + rounds(n) *
-    (n.kind === "fanout" ? Math.max(1, n.items.filter(Boolean).length)
-      : n.kind === "gate" || n.kind === "reduce" ? 0 : 1), 0);
+    (n.kind === "gate" || n.kind === "reduce" ? 0
+      : n.kind === "fanout" ? Math.max(1, n.items.filter(Boolean).length)
+      : n.kind === "verify" ? 流す件数(n)
+      : 1), 0);
 }
 
 /* a が b に（依存をたどって）行き着くか。循環になる線を出さないために使う。 */
@@ -1220,6 +1403,29 @@ function drawInspector() {
         + "⚠ 同時に走れるのは最大16。ただし16は上限で、実機ではコア数−2まで落ちます（8コアなら6）。\n"
         + "⚠ 対象だけを書くと「何についての対象か」が伝わりません。主語は目的（GOAL）に書いてください。"));
 
+    /* 🔴 既定の「1体1件」は、調べ物の段では静かに材料を枯らす。
+       4本立てても4件しか集まらないのに、走ってしまうので気づけない。 */
+    if (n.kind === "fanout") {
+      sect.appendChild(check("1体が複数件返す", n.multi, v => { n.multi = v; render(); },
+        "調べ物・洗い出しの段はこちら。契約を配列で包み、要素1つずつに同じ必須項目を掛けます"));
+      /* 🔴 「何件返る想定か」は飾りではない。下流の検証はこの件数ぶん体が立つので、
+         ここが見積りと上限の目盛りになる。空回しの --each と同じ数。 */
+      if (n.multi) {
+        sect.appendChild(num("1体あたり何件くらい返る想定か", n.each,
+          v => { n.each = Math.max(1, v || 1); },
+          "下流の検証はこの件数ぶん体が立ちます。見積りと上限の判定がこの数で決まります"));
+        const 立つ = Math.max(1, n.items.filter(Boolean).length) * Math.max(1, n.each || 1);
+        sect.appendChild(note(`目安: この段は${Math.max(1, n.items.filter(Boolean).length)}体で、`
+          + `合わせて約${立つ}件を下流へ流します。`
+          + `空回しで確かめるときは --each ${n.each} を付けてください。`));
+      }
+      sect.appendChild(note(n.multi
+        ? "1体が見つけた分だけ返します。次の段には、体ではなく件がそのまま並んで渡ります。"
+        : "⚠ いまは1体につき1件だけ返ります。対象が" + Math.max(1, n.items.filter(Boolean).length)
+          + "行なので、この段で集まる材料は最大" + Math.max(1, n.items.filter(Boolean).length)
+          + "件です。調べ物なら足りているか確かめてください。"));
+    }
+
     if (n.kind === "verify") {
       /* 🔴 自分より後ろの段は検証できない。
          段は依存だけで決まるので、下流を対象にすると生成コードが「まだ無い結果」を読む。
@@ -1227,14 +1433,55 @@ function drawInspector() {
       sect.appendChild(sel_("検証する相手", n.target,
         S.nodes.filter(x => x.id !== n.id && x.kind !== "gate" && reaches(n.id, x.id))
           .map(x => [x.id, x.title || KIND[x.kind].ja]), v => n.target = v));
+      /* 🔴 何を確かめる検証かで、投げる問いを丸ごと入れ替える。
+         事実確認の物差しで文章の質を測っても、検証は空を切るだけ。 */
+      sect.appendChild(sel_("何を確かめるか", n.vkind,
+        Object.keys(VKINDS).map(k => [k, VKINDS[k].ja]), v => { n.vkind = v; render(); }));
       sect.appendChild(field("観点（角度を変える）", n.lens, v => n.lens = v));
-      sect.appendChild(note("この検証者には作業者の会話履歴を渡しません。完成物と基準だけを渡し、"
-        + "「間違っている理由を優先して探せ」と指示するコードを生成します。"));
+
+      /* 🔴 検証する相手＝採点する答案。判定の基準＝模範解答。
+         この2つを分けないと、答案だけ渡して採点しろ、が起きる。 */
+      const bs = el("div", "sect");
+      bs.appendChild(el("span", "stencil", "判定の基準として渡すもの"));
+      bs.appendChild(el("p", "hint",
+        "検証者は「検証する相手」の出力しか読みません。"
+        + "何と照らして合否を決めるのか（指摘リスト、仕様、決めた基準）が別の部品にあるなら、ここで渡します。"));
+      const 候補 = S.nodes.filter(x =>
+        x.id !== n.id && x.kind !== "gate" && x.id !== n.target && reaches(n.id, x.id));
+      if (!候補.length) {
+        bs.appendChild(el("p", "hint", "渡せる部品がまだありません（手前の段に置いた仕事だけが選べます）。"));
+      } else {
+        const w = el("div", "deps");
+        候補.forEach(x => {
+          const on = n.basis.includes(x.id);
+          const b = el("button", "dep" + (on ? " on" : ""), x.title || KIND[x.kind].ja);
+          b.onclick = () => {
+            if (on) n.basis = n.basis.filter(i => i !== x.id);
+            else {
+              n.basis = [...n.basis, x.id];
+              // 基準を読む＝依存でもある。線が無いと順番が保証されない。
+              if (!n.deps.includes(x.id)) { n.deps.push(x.id); n.edgeChecked = true; }
+            }
+            render();
+          };
+          w.appendChild(b);
+        });
+        bs.appendChild(w);
+      }
+      sect.appendChild(bs);
+
+      sect.appendChild(note((VKINDS[n.vkind] || VKINDS.fact).hint
+        + "。この検証者には作業者の会話履歴を渡しません。完成物と基準だけを渡し、"
+        + "「通っていない可能性を優先して探せ」と指示するコードを生成します。"));
     }
 
     if (n.kind === "reduce") {
       sect.appendChild(check("件数を確認する", n.countCheck, v => n.countCheck = v,
         "予定入力数と実際の入力数を突き合わせ、欠けていれば INCOMPLETE を立てます"));
+      /* 🔴 契約に項目があっても、空文字なら素通りする。
+         「出典のない主張を落とす」と名前を付けた段が、実は何も落としていない、が起きる。 */
+      sect.appendChild(check("中身の欠けた行を落とす", n.dropEmpty, v => n.dropEmpty = v,
+        "項目が空の行を落とします。落とした件数はログに出ます（黙って減らしません）"));
       sect.appendChild(note("整理はLLMを呼ばず素のJavaScriptで生成します。重複削除・件数確認は"
         + "その方が安く速く確実です。"));
     }
@@ -1432,6 +1679,12 @@ function check(label, val, on, sub) {
   l.appendChild(s); return l;
 }
 function note(t) { return el("p", "hint", t); }
+function num(label, val, on, hint) {
+  const l = el("label", "f"); l.appendChild(el("span", "stencil", label));
+  l.appendChild(numin(val, on));
+  if (hint) l.appendChild(el("small", "hint", hint));
+  return l;
+}
 
 /* 入力中は、いま触っている欄を含む場所を作り直さない。
    render() は右パネルとヘッダの入力欄ごと作り直すので、
@@ -1606,10 +1859,17 @@ function lit(s) {
     .replace(/\$\{/g, "\\${");
 }
 
+/* 契約を JSON Schema にする。
+   🔴 既定は「1体が1件だけ返す」。調べ物の段でこれをそのまま使うと、
+      4本立てても材料が4件しか集まらない。「1体が複数件返す」を選んだときは
+      契約ごと配列で包み、要素の側に同じ必須項目を掛ける
+      （包まずに array 型の項目を1つ置くと、要素の中身が縛れなくなる）。 */
 function schemaOf(n) {
   const outs = n.outputs.filter(o => o.name.trim());
   const props = {}; outs.forEach(o => props[o.name.trim()] = { type: o.type });
-  return { type: "object", required: outs.map(o => o.name.trim()), properties: props };
+  const one = { type: "object", required: outs.map(o => o.name.trim()), properties: props };
+  if (n.kind !== "fanout" || !n.multi) return one;
+  return { type: "object", required: ["items"], properties: { items: { type: "array", minItems: 1, items: one } } };
 }
 /* 人が書いた欄は、ここで1つずつ逃がす。
    機械側の意図的な埋め込み（${JSON.stringify(item)} など）は逃がしてはいけないので、
@@ -1627,25 +1887,34 @@ function promptOf(n) {
   if (n.fail.trim()) { L.push(""); L.push("FAIL: " + lit(n.fail.trim())); }
   return L.join("\n");
 }
-function verifyPrompt(n, t) {
+/* 🔴 検証者は「検証する相手」の出力しか読まない。
+   「決めた基準どおりか」を見る検証で、基準そのものが別のノードにあると、
+   答案だけ渡されて採点しろと言われた状態になる（実測で UNVERIFIED が返った）。
+   だから基準は、相手とは別枠で、ここから明示的に手渡す。 */
+function verifyPrompt(n, t, 基準) {
+  const V = VKINDS[n.vkind] || VKINDS.fact;
+  const 基準行 = (基準 && 基準.length) ? [
+    "",
+    "判定の基準（これに照らして見ます。ここに無いことを基準にしないでください）:",
+    ...基準,
+  ] : [];
   return [
     "あなたは作成者ではなく、独立した検証者です。",
     "作成者の推論や会話履歴は参照しません。渡された完成物と基準だけで判断します。",
     "",
+    `確かめること: ${V.ja}`,
     `観点: ${lit(n.lens.trim()) || "正確性"}`,
     lit(n.job.trim()),
     "",
-    "以下の主張が間違っている可能性を優先して探してください。",
-    "1. 主張は出典によって本当に支持されているか",
-    "2. 情報は現在も有効か",
-    "3. 出典は実在し、該当内容を含んでいるか",
-    "4. 数字、日付、固有名詞に矛盾がないか",
-    "5. 推測が事実として書かれていないか",
+    "以下を、通っていない可能性の方を優先して見てください。",
+    ...V.asks.map((a, i) => `${i + 1}. ${a}`),
     "",
-    "確認できない場合は refuted ではなく unverified にします。",
+    `KEEP = ${V.keep} / DROP = ${V.drop}`,
+    "確かめようがない場合は DROP ではなく UNVERIFIED にします。",
     "",
     `対象（${t ? lit(t.title || t.id) : "?"} の出力）:`,
     "${JSON.stringify(item)}",   // ← これは機械側の埋め込み。逃がさない
+    ...基準行,
   ].join("\n");
 }
 
@@ -1712,11 +1981,18 @@ function generate() {
     L.push("  発火数++");
     L.push("  return agent(p, o)");
     L.push("}");
+    /* 🔴 上限を、手前の段が食い尽くさないようにする。
+       検証は上流の返却件数ぶん増えるので、放っておくと枠を全部使う。
+       すると最後の「まとめる」が1体も立たず、そこまでの調査が丸ごと無駄になる
+       （実測: 46件の調査が集まったのに報告書が出ず、戻り値が空になった）。
+       だから「この段より後ろで、必ず1体ずつ要る仕事」の数を先に取り置く。 */
     L.push("// 残り枠まで切り詰める。切り捨てた件数は必ず出す（静かに減らさない）。");
-    L.push("const 残り枠 = () => Math.max(0, Math.min(CAP - 発火数, 4096))   // 4096 = VM境界を越える配列長の上限");
-    L.push("const 枠内に収める = (xs, 名) => {");
-    L.push("  const 収まる = xs.slice(0, 残り枠())");
-    L.push("  if (収まる.length < xs.length) log(`⚠ ${名}: ${xs.length - 収まる.length}件を上限で切り捨てました`)");
+    L.push("// 予約ぶん＝この後ろで必ず要る仕事の数。手前の段に食わせない。");
+    L.push("const 残り枠 = (予約 = 0) => Math.max(0, Math.min(CAP - 発火数 - 予約, 4096))   // 4096 = VM境界を越える配列長の上限");
+    L.push("const 枠内に収める = (xs, 名, 予約 = 0) => {");
+    L.push("  const 収まる = xs.slice(0, 残り枠(予約))");
+    L.push("  if (収まる.length < xs.length) log(`⚠ ${名}: ${xs.length - 収まる.length}件を上限で切り捨てました`");
+    L.push("    + (予約 ? `（この後ろの仕事のために ${予約}体ぶん空けています）` : \"\"))");
     L.push("  return 収まる");
     L.push("}");
     L.push("");
@@ -1756,13 +2032,27 @@ function generate() {
         + 前の周(n);
     };
 
+    /* この段より後ろで、少なくとも何体は立つか。手前の段に食わせない枠。
+       並列は対象の数だけ確定して立つ。検証は上流次第だが、最低1体は立つ。
+       繰り返しは最低1周として数える（多めに予約すると手前を削りすぎる）。 */
+    const 後で要る = n => seg.filter(x => rk[x.id] > rk[n.id]).reduce((a, x) =>
+      a + (x.kind === "gate" || x.kind === "reduce" ? 0
+        : x.kind === "fanout" ? Math.max(1, x.items.filter(Boolean).length)
+        : 1), 0);
+
     // エージェントを立てるノードを、await できる式1つにする
     const exprOf = n => {
       const v = "r_" + n.id;
+      const 予約 = 後で要る(n);
       if (n.kind === "fanout") {
+        const 複数指示 = n.multi
+          ? "\\n\\n見つかったものは1件ずつ items に入れて、まとめて返します。"
+            + "1件しか返さないと、この段の材料はそれだけになります。"
+            + "\\n無理に数を作らず、確かなものだけを入れます。"
+          : "";
         return [
-          `parallel(枠内に収める(${v}_items, ${jstr(n.title || "並列")}).map((対象) => () =>`,
-          `    spawn(\`${promptOf(n)}\n\n対象: \${対象}${ctxOf(n)}\`, {`,
+          `parallel(枠内に収める(${v}_items, ${jstr(n.title || "並列")}, ${予約}).map((対象) => () =>`,
+          `    spawn(\`${promptOf(n)}${複数指示}\n\n対象: \${対象}${ctxOf(n)}\`, {`,
           `      label: \`\${対象}\`,`,
           `      phase: ${jstr(KIND[n.kind].phase)},`,
           ...(分離が要る(n) ? [`      isolation: "worktree",   // この段は同時に走るので、別の作業コピーで動かす`] : []),
@@ -1774,9 +2064,15 @@ function generate() {
       if (n.kind === "verify") {
         const t = S.nodes.find(x => x.id === n.target);
         const tv = t ? "r_" + t.id : "[]";
+        /* 基準は、この図面の中で既に走り終えたものだけ渡せる。
+           ゲートをまたいだ相手はここに居ないので、静かに落とさず点検側で止める。 */
+        const 基準 = (n.basis || []).filter(b => done.has(b)).map(b => {
+          const bn = S.nodes.find(x => x.id === b);
+          return `【${lit((bn && bn.title) || b)} の出力】\n\${JSON.stringify(r_${b})}`;
+        });
         return [
-          `parallel(枠内に収める([${tv}].flat().filter(Boolean), ${jstr(n.title || "検証")}).map((item, i) => () =>`,
-          `    spawn(\`${verifyPrompt(n, t)}\`, {`,
+          `parallel(枠内に収める([${tv}].flat().filter(Boolean), ${jstr(n.title || "検証")}, ${予約}).map((item, i) => () =>`,
+          `    spawn(\`${verifyPrompt(n, t, 基準)}\`, {`,
           `      label: \`検証:\${i + 1}\`,`,
           `      phase: "検証",`,
           `      schema: { type: "object", required: ["verdict", "reason"], properties: {`,
@@ -1818,12 +2114,24 @@ function generate() {
     // 走らせたあとに要る後処理（進捗ログ・検証の絞り込み）
     const postOf = n => {
       const v = "r_" + n.id;
-      if (n.kind === "fanout")
-        return [
-          `log(\`${n.title || "並列"}: \${${v}.length}/\${${v}_items.length} 件が返りました\`)`,
+      if (n.kind === "fanout") {
+        const 数え方 = n.multi ? "体" : "件";
+        const L2 = [
+          // 体数は均す前に取る。均したあとは件数になるので、欠損を数えられなくなる。
+          `const ${v}_体数 = ${v}.length`,
+          `log(\`${n.title || "並列"}: \${${v}_体数}/\${${v}_items.length} ${数え方}が返りました\`)`,
           `// 上限で切り捨てた分は 枠内に収める() が別に出す。ここは「投げたのに返らなかった」だけを見る。`,
-          `if (${v}.length < Math.min(${v}_items.length, CAP)) log(\`⚠ ${n.title || "並列"}: \${Math.min(${v}_items.length, CAP) - ${v}.length}件が返っていません。この段の結果は欠けています。\`)`,
+          `if (${v}_体数 < Math.min(${v}_items.length, CAP)) log(\`⚠ ${n.title || "並列"}: \${Math.min(${v}_items.length, CAP) - ${v}_体数}${数え方}が返っていません。この段の結果は欠けています。\`)`,
         ];
+        if (n.multi) {
+          L2.push(`// 1体が複数件返す契約なので、ここで件の並びに均す。以降は件数で数える。`);
+          L2.push(`${v} = ${v}.flatMap(r => Array.isArray(r && r.items) ? r.items : [])`);
+          L2.push(`log(\`${n.title || "並列"}: 合わせて \${${v}.length}件\`)`);
+          // 体は返ったのに中身が空、は「返らなかった」と同じくらい静かに欠ける。
+          L2.push(`if (${v}_体数 > 0 && ${v}.length === 0) log("⚠ ${n.title || "並列"}: 体は返りましたが中身が1件もありません。この段の結果は空です。")`);
+        }
+        return L2;
+      }
       if (n.kind === "verify")
         return [
           `const ${v}_kept = ${v}.filter(x => x.verdict === "KEEP")`,
@@ -1839,7 +2147,10 @@ function generate() {
     const LR = loopRange();
     const inThisSeg = LR && seg.some(n => n.id === LR.from.id);
     const looped = n => inThisSeg && rk[n.id] >= LR.a && rk[n.id] <= LR.b;
-    const asg = n => looped(n) ? `r_${n.id} = ` : `const r_${n.id} = `;
+    /* 「1体が複数件返す」段は、返ってきた体の配列を後で件の配列に均す。
+       同じ名前を作り替えるので const では受けられない。 */
+    const asg = n => looped(n) ? `r_${n.id} = `
+      : (n.kind === "fanout" && n.multi ? `let r_${n.id} = ` : `const r_${n.id} = `);
 
     /* 🔴 繰り返しは「前の周の結果を、また直す」もの。
        先頭のノードが毎周おなじ入力を読んでいたら、直したものが毎回捨てられ、
@@ -1888,11 +2199,23 @@ function generate() {
         L.push(`// 整理はLLMを呼びません。重複削除と件数確認は素のコードの方が安く速く確実です。`);
         L.push(`const ${v}_in = [${dep.join(", ")}].flat().filter(Boolean)`);
         L.push(`const ${v}_seen = new Set()`);
+        if (n.dropEmpty) L.push(`const ${v}_欠け = []`);
         L.push(`${asg(n)}${v}_in.filter(x => {`);
+        if (n.dropEmpty) {
+          // 🔴 契約に項目があっても、中身が空の文字列なら素通りする。
+          //    「出典を付ける」と決めた段で、空の出典が下流へ流れるのがこの穴。
+          L.push("  // 中身の空いた項目が1つでもある行は、契約を満たしていないので落とす");
+          L.push("  if (x && typeof x === \"object\" && Object.values(x).some(v =>");
+          L.push("        v == null || (typeof v === \"string\" && v.trim() === \"\"))) {");
+          L.push(`    ${v}_欠け.push(x); return false`);
+          L.push("  }");
+        }
         L.push("  const k = JSON.stringify(x)");
         L.push(`  if (${v}_seen.has(k)) return false`);
         L.push(`  ${v}_seen.add(k); return true`);
         L.push("})");
+        if (n.dropEmpty)
+          L.push(`if (${v}_欠け.length) log(\`整理: 中身の欠けた \${${v}_欠け.length}件を落としました\`)`);
         if (n.countCheck) {
           // 「重複で減った」と「返ってこなかった」は別物。欠損だけを INCOMPLETE にする。
           // 並列は投入数、単発は1本として数える。数え落とすと欠損に気づけない。
@@ -1900,7 +2223,11 @@ function generate() {
             .map(d => S.nodes.find(x => x.id === d))
             .filter(dn => dn && dn.kind !== "reduce" && dn.kind !== "gate");
           const exp = srcs.map(dn => dn.kind === "fanout" ? `r_${dn.id}_items.length` : "1");
-          const got = srcs.map(dn => dn.kind === "fanout" ? `r_${dn.id}.length` : `(r_${dn.id} ? 1 : 0)`);
+          // 🔴 数えるのは「投げた仕事が返ったか」。1体が複数件返す段では
+          //    均したあとの件数と体数がずれるので、体数の側で突き合わせる。
+          const got = srcs.map(dn => dn.kind === "fanout"
+            ? (dn.multi ? `r_${dn.id}_体数` : `r_${dn.id}.length`)
+            : `(r_${dn.id} ? 1 : 0)`);
           L.push(`// 静かに失敗した1件を完成扱いにしないための件数確認`);
           if (srcs.length) {
             L.push(`const ${v}_expected = ${exp.join(" + ")}`);
@@ -2023,13 +2350,14 @@ function drawDialog() {
 const TEMPLATES = {
   "競合調査": () => Object.assign(
     build("competitor-scan", "渡された商品・サービスについて、経営者が商品設計と販売戦略を決められる水準の競合調査をまとめる",
-    ["公式サイトの料金ページ（一次情報）", "実際に問い合わせて得た回答"], { max: 12, conc: 5 }, [
+    // 上限は実測から。1体が約9件返したので 5体×10件＋検証50＋整理0＋統合1 に耐える数にする
+    ["公式サイトの料金ページ（一次情報）", "実際に問い合わせて得た回答"], { max: 64, conc: 5 }, [
       ["fanout", "角度を分けて調べる", "渡された商品・サービスについて、指定された観点で日本国内の競合を調べます。すべての発見に出典URL・公開日・確認日・確信度を付けます。出典のない主張は書きません。",
         ["競合サービスと料金", "法人担当者の悩み", "利用者の不満", "2026年のトレンド", "差別化の余地"],
         [["finding", "string"], ["source_url", "string"], ["published_at", "string"], ["confidence", "number"]],
-        "公式情報を確認できない場合は、推測せず status を unverified にする"],
-      ["reduce", "重複と同一ソースを畳む", "", null, [["kept", "number"]], ""],
-      ["verify", "出典が実在するか確かめる", "", null, [["verdict", "string"]], "確認できないものは unverified にする", "出典の実在と鮮度"],
+        "公式情報を確認できない場合は、推測せず status を unverified にする", null, { multi: true, each: 10 }],
+      ["reduce", "重複と同一ソースを畳む", "", null, [["kept", "number"]], "", null, { dropEmpty: true }],
+      ["verify", "出典が実在するか確かめる", "", null, [["verdict", "string"]], "確認できないものは unverified にする", "出典の実在と鮮度", { vkind: "fact" }],
       ["synthesize", "調査報告書にまとめる", "検証を通った情報だけを使い、市場機会・顧客課題・競合の弱点・推奨商品・販売戦略をまとめます。",
         null, [["report", "string"], ["opportunities", "array"]], "材料が足りない項目は「材料不足」と明記する"],
     ]),
@@ -2039,32 +2367,82 @@ const TEMPLATES = {
       sample: "オンライン英会話スクール",
     } }),
 
-  // 起動時にテーマを受け取る例。同じ figure を何度でも別テーマで呼べる。
-  "記事制作": () => Object.assign(
-    build("article-build", "渡されたテーマで、出典の付いた1万字の記事を、密度を落とさずに仕上げる",
-    ["一次情報（公式ドキュメント・原典）", "実際に手元で再現できた結果"], { max: 14, conc: 5 }, [
-      ["fanout", "材料を集める",
-        "渡されたテーマについて、指定された角度から記事の材料を集めます。すべての主張に出典URLと公開日を付けます。",
-        ["公式情報", "海外事例", "科学的根拠", "反対意見", "日本市場への影響"],
-        [["claim", "string"], ["source_url", "string"], ["published_at", "string"]],
-        "出典を確認できない主張は採用せず、落とした理由を残す"],
-      ["reduce", "出典のない主張を落とす", "", null, [["kept", "number"]], ""],
-      ["verify", "事実を確認する", "", null, [["verdict", "string"]], "確認できないものは unverified にする", "数字・日付・固有名詞"],
-      ["synthesize", "本文を書く", "検証を通った材料だけで本文を書きます。誇張せず、断定できないことは断定しません。",
-        null, [["body", "string"], ["word_count", "number"]], "材料が足りない節は書かず、不足を明記する"],
-      ["gate", "公開してよいか人が決める", "公開は不可逆です。ここで一度止まります。"],
-    ]),
-    { input: {
+  /* 起動時にテーマを受け取る例。同じ図面を何度でも別テーマで呼べる。
+     🔴 このひな形は実際に走らせて直したもの。数字は実測に基づく。
+        材料集めは1体あたり14〜23件（平均18）を返した。上限を低く取ると
+        検証の手前で材料が捨てられる（実測では30件が捨てられた）。
+        上限を上げてもコストは増えない＝体数は集まった材料の数で決まる。
+     人間ゲート2つで図面2枚に割れる。届け先を決めてから本文を書く順序にしてある。 */
+  "記事制作": () => {
+    const s = buildGraph("article-build",
+      "渡されたテーマで、出典の付いた1万字の記事を、人間らしい文章に仕上げる",
+      ["一次情報（公式ドキュメント・原典）", "実際に手元で再現できた結果"],
+      { max: 120, conc: 5 }, [
+        { k: "fanout", t: "材料を集める", d: [],
+          j: "渡されたテーマについて、指定された角度から記事の材料を集めます。すべての主張に出典URLと公開日を付けます。",
+          items: ["公式情報", "活用事例", "評判（批判）", "評判（賞賛）"],
+          o: [["claim", "string"], ["source_url", "string"], ["published_at", "string"]],
+          f: "出典を確認できない主張は採用せず、落とした理由を残す",
+          multi: true, each: 18 },
+        { k: "reduce", t: "出典のない主張を落とす", d: [0],
+          o: [["kept", "number"]], dropEmpty: true },
+        { k: "verify", t: "事実を確認する", d: [1], lens: "数字・日付・固有名詞", vkind: "fact",
+          o: [["verdict", "string"]], f: "確認できないものは unverified にする" },
+        { k: "gate", t: "これをどこの誰に、どう届けるか決める", d: [2],
+          j: "この記事をどこの誰にどう届けるか決める。それぞれ候補を3つ挙げる。" },
+        { k: "synthesize", t: "本文を書く", d: [3],
+          j: "決められた「誰にどのように届けるか」を考慮の上で書きます。"
+             + "検証を通った材料だけで本文を書きます。誇張せず、断定できないことは断定しません。\n"
+             + "下記のスキルを使用する。\ncognitive-rhythm-writing\njapanese-tech-writing",
+          o: [["body", "string"], ["word_count", "number"]],
+          f: "材料が足りない節は書かず、不足を明記する" },
+        /* 🔴 ここが繰り返しの入口。現物（本文）を受け取るのはこの段だけにする。
+           2周目からは前の周の修正版がここへ渡るので、checked_body に載せて後ろへ運べば、
+           修正はいつも最新版を直すことになる。 */
+        { k: "single", t: "人間らしさをチェック", d: [4],
+          j: "スキル\nstop-ai-slop-jp\nを使って本文をチェックする\n"
+             + "checked_body には、今回チェックした本文をそのまま全文入れる（後ろの段が直す対象になる）。",
+          o: [["results", "array"], ["failed", "number"], ["checked_body", "string"]],
+          f: "直すか迷った場合は成功扱いにせず失敗として記録する" },
+        /* 🔴 「本文を書く」に直接つながない。繰り返しの外にあるので毎周おなじ初稿が渡り、
+           2周目以降に「最新の指摘」と「古い本文」を同時に渡すことになる（点検 K-41）。 */
+        { k: "single", t: "修正", d: [5],
+          j: "渡された checked_body を直す対象とする。初稿ではなく、これが最新版である。\n"
+             + "チェックNGとなった点を修正する\n"
+             + "直した箇所だけでなく、修正後の本文を丸ごと fixed に入れて返す。\n"
+             + "addressed には、受け取ったNG指摘の1件ごとに「指摘」「直した箇所」「直した後の文」を入れる。\n"
+             + "直せなかった指摘は not_fixed に、理由を添えて入れる（黙って落とさない）。",
+          o: [["fixed", "string"], ["addressed", "array"], ["not_fixed", "array"]],
+          f: "原因を特定できないものは直さず、not_fixed に理由を残す" },
+        /* 🔴 検証は「検証する相手」の出力しか読まない。だから基準（何を指摘されたか）は
+           相手の契約（addressed / not_fixed）に載せて届ける。d の先頭が検証する相手。 */
+        { k: "verify", t: "検証OKか確認する", d: [6, 5], basis: [5],
+          lens: "NG事項が指摘通り直っているか", vkind: "rule",
+          j: "人間らしい文章か、読み手を引き込む文章になっているか確認する",
+          o: [["verdict", "string"]], f: "確認できないものは unverified にする" },
+        { k: "gate", t: "公開してよいか人が決める", d: [7],
+          j: "公開は不可逆です。ここで一度止まります。" },
+      ]);
+    // 人間らしさチェック → 修正 → 判定 を、合格するまで回す
+    s.loop = { from: s.nodes[5].id, to: s.nodes[7].id, max: 5, dry: 2 };
+    s.input = {
       name: "テーマ",
       desc: "起動時に、書きたい記事のテーマを1行で渡します。",
-      sample: "睡眠の質を上げる方法",
-    } }),
+      sample: "話題になっているツールについて",
+    };
+    return s;
+  },
 
-  // 1段目に「並列」を3本置く例。調べる対象が違うものは、別々の並列にする。
-  "新商品の立ち上げ": () => buildGraph("product-launch",
+  /* 1段目に「並列」を3本置く例。調べる対象が違うものは、別々の並列にする。
+     🔴 起動時の入力は必須。実測で、商品名を渡す口が無いまま走らせたら
+        「訴求が決まらないので原稿は1文字も書かない」という結論だけが返ってきた
+        （振る舞いとしては正しいが、使っても何も出てこない）。
+     ⚠ 競合A〜Dも「対象を指定できていない」ので、実在企業に辿り着けない。
+        使うときは実際の競合名に書き換える前提の見本として置いている。 */
+  "新商品の立ち上げ": () => Object.assign(buildGraph("product-launch",
     "新商品の訴求を決め、出す物を一気に作る",
     ["公式サイトの表記（一次情報）", "実際に売れた数", "景品表示法の条文"],
-    { max: 16, conc: 12 }, [
+    { max: 28, conc: 12 }, [
       { k: "fanout", t: "競合の料金を調べる", d: [],
         j: "指定された競合1社の料金体系を調べます。出典URLと確認日を必ず付けます。",
         items: ["競合A", "競合B", "競合C", "競合D"],
@@ -2074,12 +2452,12 @@ const TEMPLATES = {
         j: "指定された場所の口コミから、顧客の不満を抜き出します。原文の引用を必ず添えます。",
         items: ["レビューサイト", "SNS", "自社問い合わせ"],
         o: [["complaint", "string"], ["quote", "string"], ["source_url", "string"]],
-        f: "原文を引けない不満は採用しない" },
+        f: "原文を引けない不満は採用しない", multi: true, each: 3 },
       { k: "single", t: "表現リスクを確認する", d: [],
         j: "景品表示法と薬機法の観点から、使ってはいけない表現を洗い出します。条文を引用します。",
         o: [["ng_expressions", "array"], ["article", "string"]],
         f: "条文を特定できない指摘は書かず、要確認として残す" },
-      { k: "reduce", t: "重複を畳む", d: [0, 1, 2], o: [["kept", "number"]] },
+      { k: "reduce", t: "重複を畳む", d: [0, 1, 2], o: [["kept", "number"]], dropEmpty: true },
       { k: "synthesize", t: "訴求を決める", d: [3],
         j: "調べた材料から、この商品を誰にどう訴えるかを1つに決めます。根拠を必ず添えます。",
         o: [["positioning", "string"], ["reason", "string"]],
@@ -2089,7 +2467,9 @@ const TEMPLATES = {
         items: ["LP", "X投稿", "リール台本", "メール"],
         o: [["draft", "string"], ["media", "string"]],
         f: "訴求から外れる案は書かず、理由を残す" },
-      { k: "verify", t: "炎上リスクを見る", d: [5], lens: "表現リスクとブランド整合",
+      // 基準＝使ってはいけない表現の一覧。これが手元に無いと照らしようがない
+      { k: "verify", t: "炎上リスクを見る", d: [5], basis: [2],
+        lens: "表現リスクとブランド整合", vkind: "rule",
         o: [["verdict", "string"]], f: "判断できないものは unverified にする" },
       { k: "synthesize", t: "出す物をまとめる", d: [6],
         j: "検証を通った原稿だけをまとめ、媒体ごとに並べます。",
@@ -2097,6 +2477,11 @@ const TEMPLATES = {
       { k: "gate", t: "公開してよいか人が決める", d: [7],
         j: "公開は不可逆です。ここで一度止まります。" },
     ]),
+    { input: {
+      name: "新商品",
+      desc: "起動時に、訴求を決めたい商品の名前と一言説明を渡します。ここが空だと訴求が決まらず、原稿は1文字も書けません。",
+      sample: "◯◯（誰の何を解決する商品か、一言で）",
+    } }),
 
   /* 製品を良くする工程まるごと。人間ゲート3つで図面4枚に割れる。
      調査 →[承認]→ 仕様 →[承認]→ 実装 →[承認]→ 品質担保（繰り返し） */
@@ -2104,7 +2489,7 @@ const TEMPLATES = {
     const s = buildGraph("qup",
       "【ここに製品名と一言説明を書く】を良くする。調べたことを根拠に作るものを決めて、実装し、動くまで直しきる",
       ["公式ドキュメントに書いてある", "実際に手元で動かして再現できた", "テストが通った"],
-      { max: 60, conc: 8 }, [
+      { max: 128, conc: 8 }, [
         // ── 図面1 調査 ──────────────────────────
         { k: "fanout", t: "角度を分けて調べる", d: [],
           j: "🔴 調べる対象は、上の GOAL に名前が書かれている製品そのものです。"
@@ -2117,9 +2502,10 @@ const TEMPLATES = {
                   "この製品を実際に使った人の声", "この製品に足りていない点"],
           o: [["finding", "string"], ["source_url", "string"], ["published_at", "string"], ["confidence", "number"]],
           f: "出典を確認できない場合は、推測せず落として理由を残す。"
-             + "GOAL の製品と関係のない題材を調べてしまった場合は、その結果を出さずに「対象外」と返す" },
-        { k: "reduce", t: "重複と同一出典を畳む", d: [0], o: [["kept", "number"]] },
-        { k: "verify", t: "出典が実在し今も有効か確かめる", d: [1], lens: "出典の実在と鮮度",
+             + "GOAL の製品と関係のない題材を調べてしまった場合は、その結果を出さずに「対象外」と返す",
+          multi: true, each: 12 },
+        { k: "reduce", t: "重複と同一出典を畳む", d: [0], o: [["kept", "number"]], dropEmpty: true },
+        { k: "verify", t: "出典が実在し今も有効か確かめる", d: [1], lens: "出典の実在と鮮度", vkind: "fact",
           o: [["verdict", "string"]], f: "確認そのものができない場合は unverified にする" },
         { k: "synthesize", t: "分かったことをまとめる", d: [2],
           j: "検証を通った材料だけで、この道具に何が足りていないかをまとめます。",
@@ -2133,7 +2519,9 @@ const TEMPLATES = {
           j: "前の図面の調査結果から、作るべき機能の候補を出します。それぞれに、なぜ要るのか（調査のどの発見が根拠か）を必ず添えます。",
           o: [["feature", "string"], ["evidence", "string"], ["pain_if_missing", "string"]],
           f: "根拠を調査結果から示せない候補は出さない" },
-        { k: "verify", t: "実装できるか確かめる", d: [5], lens: "実装の穴・依存・壊れる既存機能",
+        // 基準＝調査で分かったこと。候補の根拠がそこに実在するかを照らす
+        { k: "verify", t: "実装できるか確かめる", d: [5], basis: [3],
+          lens: "実装の穴・依存・壊れる既存機能", vkind: "rule",
           o: [["verdict", "string"]], f: "判断できないものは unverified にする" },
         { k: "synthesize", t: "作るものを決める", d: [6],
           j: "検証を通った候補だけで、今回作るものと作らないものを分けます。作らない理由も残します。\n\n"
@@ -2152,7 +2540,8 @@ const TEMPLATES = {
           j: "承認された機能を実装します。⚠ 同じファイルを触るので、この工程は直列です（並列にすると互いの変更を上書きします）。既存の動きを壊していないか、変更のたびに確かめます。",
           o: [["changes", "array"], ["regressions", "string"]],
           f: "実装できないものは無理に書かず、なぜできないかを残す" },
-        { k: "verify", t: "決めたとおりに作れているか確かめる", d: [9],
+        // 基準＝作ると決めたもの（仕様）。実装がそれと合っているかを照らす
+        { k: "verify", t: "決めたとおりに作れているか確かめる", d: [9], basis: [7], vkind: "rule",
           lens: "仕様と実装のズレ・入れたつもりで入っていないもの",
           o: [["verdict", "string"]], f: "確認できないものは unverified にする" },
         { k: "gate", t: "品質担保に進んでよいか人が決める", d: [10],
@@ -2164,8 +2553,8 @@ const TEMPLATES = {
           items: ["部品箱", "図面（キャンバス）", "右パネル", "段の挿入", "繰り返しの帯",
                   "表題欄と書き出し", "読込と保存", "キーボード操作"],
           o: [["action", "string"], ["steps", "array"], ["expected", "string"]],
-          f: "手順を具体化できないものは出さず、理由を残す" },
-        { k: "reduce", t: "テストの重複を畳む", d: [12], o: [["kept", "number"]] },
+          f: "手順を具体化できないものは出さず、理由を残す", multi: true },
+        { k: "reduce", t: "テストの重複を畳む", d: [12], o: [["kept", "number"]], dropEmpty: true },
         { k: "single", t: "テストを実施する", d: [13],
           j: "テストを、実際にブラウザを操作して実施します。⚠ ブラウザは1つしかないので直列に行います。",
           o: [["results", "array"], ["failed", "number"]],
@@ -2173,7 +2562,9 @@ const TEMPLATES = {
         { k: "single", t: "落ちたものを直す", d: [14], writes: true,
           j: "失敗したテストの原因を探して直します。仕様を変えないと直らないものは直さず、印を付けて残します。",
           o: [["fixed", "array"]], f: "原因を特定できないものは直さず、理由を残す" },
-        { k: "verify", t: "直ったか判定する", d: [15], lens: "再現手順を実際に踏んで直っているか",
+        // 基準＝落ちたテストと再現手順。それを実際に踏んで直ったかを見る
+        { k: "verify", t: "直ったか判定する", d: [15], basis: [14],
+          lens: "再現手順を実際に踏んで直っているか", vkind: "repro",
           o: [["verdict", "string"]], f: "確認できないものは unverified にする" },
       ]);
     // 品質担保だけを繰り返す（実施 → 直す → 判定）
@@ -2182,41 +2573,52 @@ const TEMPLATES = {
   },
 
   // 繰り返しの例。テストを実施 → 直す → 判定 を、合格するまで回す。
+  /* 🔴 起動時の入力は必須。試走で、どの画面を触るのかを渡す口が無いまま書き出せてしまった。
+        「新商品の立ち上げ」で一度踏んだのと同じ穴（商品名を渡す口が無い）。
+        洗い出しの対象は「部品箱」「右パネル」のように画面の中の区画なので、
+        どのアプリのどのURLなのかが外から渡らないと、1体も動き出せない。 */
   "UI操作の不備を潰す": () => {
     const s = buildGraph("uiux-sweep", "画面の操作不備を洗い出し、直しきる",
       ["実際に操作して再現できた", "コンソールにエラーが出ていない"], { max: 60, conc: 8 }, [
         { k: "fanout", t: "操作パターンを洗い出す", d: [],
-          j: "指定された画面領域について、人が取りうる操作を洗い出してテストケースにします。再現手順は、誰がやっても同じ結果になるまで具体的に書きます。",
+          j: "渡された画面の、指定された領域について、人が取りうる操作を洗い出してテストケースにします。再現手順は、誰がやっても同じ結果になるまで具体的に書きます。開く先（URLなど）を再現手順の1行目に必ず含めます。後の段はこの手順だけを見て実際に操作するので、ここに書かれていない画面には辿り着けません。",
           items: ["部品箱", "図面（キャンバス）", "右パネル", "段の挿入", "表題欄と書き出し", "読込と保存", "キーボード操作", "明暗と画面幅"],
           o: [["action", "string"], ["steps", "array"], ["expected", "string"]],
-          f: "手順を具体化できないものは出さず、理由を残す" },
-        { k: "reduce", t: "重複を畳む", d: [0], o: [["kept", "number"]] },
+          f: "手順を具体化できないものは出さず、理由を残す", multi: true },
+        { k: "reduce", t: "重複を畳む", d: [0], o: [["kept", "number"]], dropEmpty: true },
         { k: "synthesize", t: "テスト一覧にする", d: [1],
           j: "テストケースを、実施する順に並べた一覧にします。",
           o: [["cases", "array"]], f: "実施できないものは落として理由を書く" },
         { k: "single", t: "テストを実施する", d: [2],
-          j: "テスト一覧を、実際にブラウザを操作して実施します。⚠ ブラウザは1つしかないので直列に行います（並列にすると互いのブラウザを奪い合います）。",
+          j: "テスト一覧を、実際にブラウザを操作して実施します。開く先は、各テストの再現手順に書かれた画面です。⚠ ブラウザは1つしかないので直列に行います（並列にすると互いのブラウザを奪い合います）。",
           o: [["results", "array"], ["failed", "number"]],
           f: "操作そのものができない場合は、成功扱いにせず失敗として記録する" },
         { k: "single", t: "落ちたものを直す", d: [3], writes: true,
           j: "失敗したテストの原因を探して直します。仕様を変えないと直らないものは直さず、印を付けて残します。",
           o: [["fixed", "array"]], f: "原因を特定できないものは直さず、理由を残す" },
-        { k: "verify", t: "直ったか判定する", d: [4], lens: "再現手順を実際に踏んで直っているか",
+        // 基準＝落ちたテストと再現手順。それを実際に踏んで直ったかを見る
+        { k: "verify", t: "直ったか判定する", d: [4], basis: [3],
+          lens: "再現手順を実際に踏んで直っているか", vkind: "repro",
           o: [["verdict", "string"]], f: "確認できないものは unverified にする" },
       ]);
     s.loop = { from: s.nodes[3].id, to: s.nodes[5].id, max: 5, dry: 2 };
+    s.input = {
+      name: "対象の画面",
+      desc: "起動時に、触ってほしい画面のURLと、その画面が何であるかを渡します。ここが無いと、洗い出しが「どの画面か」を知らないまま始まります。",
+      sample: "http://127.0.0.1:7391/ — 業務フローを図で設計して書き出す設計盤",
+    };
     return s;
   },
 
   "営業提案": () => Object.assign(
     build("sales-proposal", "渡された顧客に向けて、商談で使える提案書一式を、推測と事実を混ぜずに作る",
-    ["顧客が実際に発言・提供した情報", "公開されている一次情報"], { max: 10, conc: 5 }, [
+    ["顧客が実際に発言・提供した情報", "公開されている一次情報"], { max: 36, conc: 5 }, [
       ["fanout", "顧客まわりを調べる", "渡された顧客企業を、指定された観点で調べます。顧客が実際に提供した情報と、こちらが推測した情報を必ず分けて書きます。",
         ["事業内容と直近の動き", "業界の課題", "競合の動向", "顧客の過去の発言", "導入の障壁"],
         [["finding", "string"], ["is_from_customer", "boolean"], ["source_url", "string"]],
-        "出典を確認できない場合は is_from_customer を false にし status を unverified にする"],
-      ["reduce", "重複を畳む", "", null, [["kept", "number"]], ""],
-      ["verify", "推測が事実として書かれていないか見る", "", null, [["verdict", "string"]], "判断できないものは unverified にする", "推測と事実の混同"],
+        "出典を確認できない場合は is_from_customer を false にし status を unverified にする", null, { multi: true, each: 5 }],
+      ["reduce", "重複を畳む", "", null, [["kept", "number"]], "", null, { dropEmpty: true }],
+      ["verify", "推測が事実として書かれていないか見る", "", null, [["verdict", "string"]], "判断できないものは unverified にする", "推測と事実の混同", { vkind: "fact" }],
       ["synthesize", "提案書と想定問答を作る", "検証を通った材料だけで、提案・見積の前提・商談質問・反論対応を作ります。推測に基づく箇所には印を付けます。",
         null, [["proposal", "string"], ["questions", "array"]], "顧客未確認の前提は必ず「未確認」と明記する"],
       ["gate", "顧客に送ってよいか人が決める", "外部送信は不可逆です。ここで一度止まります。"],
@@ -2246,7 +2648,14 @@ function buildGraph(name, goal, anchors, caps, rows) {
     if (r.items) n.items = r.items;
     if (r.o) n.outputs = r.o.map(([nm, ty]) => ({ name: nm, type: ty }));
     if (r.f) n.fail = r.f;
-    if (r.k === "verify") { n.target = made[r.d[0]].id; n.lens = r.lens || ""; }
+    n.multi = !!r.multi;
+    if (r.each) n.each = r.each;
+    n.dropEmpty = !!r.dropEmpty;
+    if (r.k === "verify") {
+      n.target = made[r.d[0]].id; n.lens = r.lens || ""; n.vkind = r.vkind || "fact";
+      n.basis = (r.basis || []).map(i => made[i].id);
+      n.basis.forEach(b => { if (!n.deps.includes(b)) n.deps.push(b); });
+    }
     s.nodes.push(n); made.push(n);
   }
   return s;
@@ -2257,7 +2666,8 @@ function build(name, goal, anchors, caps, rows) {
   const s = blank();
   s.name = name; s.goal = goal; s.anchors = anchors; s.caps = caps;
   let prev = null;
-  for (const [kind, title, job, items, outs, fail, lens] of rows) {
+  for (const [kind, title, job, items, outs, fail, lens, opts] of rows) {
+    const o = opts || {};
     const n = newNode(kind);
     n.title = title; n.job = job || ""; n.deps = prev ? [prev.id] : [];
     n.edgeChecked = true;
@@ -2265,7 +2675,10 @@ function build(name, goal, anchors, caps, rows) {
     if (items) n.items = items;
     if (outs) n.outputs = outs.map(([nm, ty]) => ({ name: nm, type: ty }));
     if (fail) n.fail = fail;
-    if (kind === "verify") { n.target = prev ? prev.id : ""; n.lens = lens || ""; }
+    n.multi = !!o.multi;
+    if (o.each) n.each = o.each;
+    n.dropEmpty = !!o.dropEmpty;
+    if (kind === "verify") { n.target = prev ? prev.id : ""; n.lens = lens || ""; n.vkind = o.vkind || "fact"; }
     if (kind === "gate") n.irreversible = false;
     s.nodes.push(n); prev = n;
   }
@@ -2297,20 +2710,68 @@ const selT = $("#sel-tmpl");
 Object.keys(TEMPLATES).forEach(k => {
   const o = el("option", null, k); o.value = k; selT.appendChild(o);
 });
-selT.onchange = () => {
+/* 🔴 「ノードがあるか」で聞くと、ひな形を読んだ直後にも必ず聞かれる。
+   まだ1文字も直していないのに「消えます」と言われるので、ひな形の見比べができない。
+   読んだ直後の姿を覚えておき、そこから変わっていなければ手つかずとみなす。 */
+let 手つかずの姿 = JSON.stringify(blank());
+const 描きかけ = () => S.nodes.length > 0 && JSON.stringify(S) !== 手つかずの姿;
+const 読み込んだ = () => { 手つかずの姿 = JSON.stringify(S); };
+
+/* 🔴 confirm() と alert() は使わない。
+   サンドボックス（Artifact の iframe など）では黙って false が返るので、
+   「ダイアログも出ないのに、何も起きない」という一番たちの悪い状態になる。
+   ⇒ 確認は <dialog> で自前に出す。これはただのHTML要素なので、どこでも出る。 */
+function 確かめる(本文, 補足) {
+  return new Promise(res => {
+    const d = $("#ask");
+    $("#ask-msg").textContent = 本文;
+    $("#ask-sub").textContent = 補足 || "";
+    let 済 = false;
+    const 閉じる = v => { if (済) return; 済 = true; d.close(); res(v); };
+    $("#ask-yes").onclick = () => 閉じる(true);
+    $("#ask-no").onclick = () => 閉じる(false);
+    d.oncancel = () => 閉じる(false);      // Esc
+    d.onclose = () => 閉じる(false);       // どの経路で閉じても宙づりにしない
+    d.showModal();
+    $("#ask-no").focus();                  // 既定は「やめる」＝取り返しのつく側
+  });
+}
+let toastT = null;
+function 知らせる(msg) {
+  const t = $("#toast");
+  t.textContent = msg;
+  t.hidden = false;
+  clearTimeout(toastT);
+  toastT = setTimeout(() => { t.hidden = true; }, 5000);
+}
+// 図面の検査や書き出しはブラウザの外からも走らせるので、navigator が無い前提で書く
+const 戻すキー = (typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.userAgent))
+  ? "⌘Z" : "Ctrl+Z";
+
+selT.onchange = async () => {
   const k = selT.value;
   selT.value = "";
-  if (!k) return;
-  if (S.nodes.length && !confirm("いま描いている図面は消えます。ひな形を読み込みますか？")) return;
-  S = TEMPLATES[k](); sel = null; render();
+  if (!k || !TEMPLATES[k]) return;
+  const 捨てる = 描きかけ();
+  // 手を付けた図面を捨てるときだけ聞く。手つかずなら黙って差し替える（見比べのため）
+  if (捨てる && !await 確かめる(
+    `いま描いている図面「${S.name || "無題"}」は消えます。ひな形「${k}」を読み込みますか？`,
+    `読み込んだ後でも ${戻すキー} で1回だけ戻せます。`)) return;
+  if (捨てる) snapshot();          // 描きかけを捨てる前に、1手ぶん控えておく
+  S = TEMPLATES[k](); sel = null; 読み込んだ(); render();
+  知らせる(捨てる ? `ひな形を読み込みました（前の図面に戻すなら ${戻すキー}）` : "ひな形を読み込みました");
 };
 
 $("#btn-load").onclick = () => {
   const inp = el("input"); inp.type = "file"; inp.accept = ".json,application/json";
-  inp.onchange = () => {
+  inp.onchange = async () => {
     const f = inp.files[0]; if (!f) return;
-    // ひな形と同じく、描きかけを黙って捨てない
-    if (S.nodes.length && !confirm("いま描いている図面は消えます。読み込みますか？")) return;
+    // ひな形と同じく、手を付けた図面を捨てるときだけ聞く
+    const 捨てる = 描きかけ();
+    if (捨てる && !await 確かめる(
+      `いま描いている図面「${S.name || "無題"}」は消えます。読み込みますか？`,
+      `読み込んだ後でも ${戻すキー} で1回だけ戻せます。`)) return;
+    if (捨てる) snapshot();
     const r = new FileReader();
     r.onload = () => {
       try {
@@ -2318,8 +2779,9 @@ $("#btn-load").onclick = () => {
         if (!d || !Array.isArray(d.nodes)) throw new Error("nodes がありません");
         S = normalize(d); seq = S.nodes.length;
         S.nodes.forEach(n => { const m = /^n(\d+)$/.exec(n.id); if (m) seq = Math.max(seq, +m[1]); });
-        sel = null; render();
-      } catch (e) { alert("この図面は読めません: " + e.message); }
+        sel = null; 読み込んだ(); render();
+        知らせる(捨てる ? `読み込みました（前の図面に戻すなら ${戻すキー}）` : "読み込みました");
+      } catch (e) { 知らせる("この図面は読めません: " + e.message); }
     };
     r.readAsText(f);
   };

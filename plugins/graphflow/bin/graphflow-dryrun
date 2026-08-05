@@ -23,14 +23,28 @@ const argv = process.argv.slice(2);
 if (!argv.length || argv[0] === "-h" || argv[0] === "--help") {
   console.log(`書き出したワークフローを、AIを呼ばずに空回しします。
 
-  graphflow-dryrun <ワークフロー.js> [--pass] [--null N]
+  graphflow-dryrun <ワークフロー.js> [起動時の入力] [--pass] [--null N] [--each N]
+
+  起動時の入力
+            図面に「起動時の入力」があるときは、ファイル名のすぐ後ろに置きます。
+            フラグより前です。後ろに置くと渡りません。
+
+              graphflow-dryrun foo.js "調べたいテーマ" --pass
+
+            🔴 渡し忘れると、1段目が動き出せないまま最後まで走り抜けて
+            「✅ 最後まで走りました／呼ぶAIの数: 0 体」と出ます。合格ではありません。
+            ⚠ の行に「〜が渡されていません」が無いことを必ず確かめてください。
 
   --pass    検証がすべて合格(KEEP)を返す前提で回す。
             既定はすべて不合格(DROP)＝繰り返しが最悪どこまで回るかを見る。
   --null N  N体に1体が null を返す（既定は落とさない）。
             公式仕様で agent() は「中断・回復不能なAPIエラー」のとき null を返す。
             https://code.claude.com/docs/en/workflows
-            落ちたことに図面が気づけるかを、課金なしで確かめる。`);
+            落ちたことに図面が気づけるかを、課金なしで確かめる。
+  --each N  「1体が複数件返す」段で、1体が何件返す想定にするか（既定1）。
+            下流の検証はこの件数ぶん立つので、上限に当たるかどうかがここで変わる。
+            🔴 既定の1は最も少ない見積り。実際は1体が数件返すので、
+            本番で何体になるかを見たいときは実際に近い数を渡す。`);
   process.exit(argv.length ? 0 : 1);
 }
 
@@ -45,21 +59,42 @@ const 落とす間隔 = (() => {
   return n;
 })();
 let 落とした数 = 0;
+// 「1体が複数件返す」段で、1体あたり何件返す想定にするか
+const 一体あたり = (() => {
+  const i = argv.indexOf("--each");
+  if (i < 0) return 1;
+  const n = parseInt(argv[i + 1], 10);
+  if (!Number.isFinite(n) || n < 1) { console.error("--each には1以上の整数を渡します"); process.exit(1); }
+  return n;
+})();
 
 let code;
 try { code = fs.readFileSync(path.resolve(file), "utf8"); }
 catch (e) { console.error(`読めません: ${e.message}`); process.exit(1); }
 
-/* 契約(schema)から、形だけ合っている偽の返事を作る */
-function 偽の返事(schema, verdict) {
+/* 契約(schema)から、形だけ合っている偽の返事を作る。
+   🔴 入れ子を見ないと、1体が複数件返す段で偽の返事が本番と別の形になり、
+      下流に立つ体数がまるごとずれる（空回しの意味が無くなる）。 */
+function 偽の値(v, k, 印) {
+  if (!v || typeof v !== "object") return `${k}のサンプル${印}`;
+  if (v.type === "number") return 1;
+  if (v.type === "boolean") return true;
+  if (v.type === "object") return 偽の返事(v, undefined, 印);
+  if (v.type === "array") {
+    const 件数 = Math.max(v.minItems || 1, v.items ? 一体あたり : 1);
+    /* 🔴 中身まで1件ずつ変える。同じ値が並ぶと整理の重複削除で畳まれ、
+       下流に立つ体数が本番より少なく見える（空回しが甘い方に嘘をつく）。 */
+    return Array.from({ length: 件数 }, (_, i) =>
+      v.items ? 偽の値(v.items, k, `${印}-${i + 1}`) : `${k}のサンプル${印}-${i + 1}`);
+  }
+  return `${k}のサンプル${印}`;
+}
+function 偽の返事(schema, verdict, 印 = "") {
   if (!schema || schema.type !== "object") return { ok: true };
   const o = {};
   for (const [k, v] of Object.entries(schema.properties || {})) {
     if (k === "verdict") { o[k] = verdict; continue; }
-    o[k] = v.type === "number" ? 1
-      : v.type === "boolean" ? true
-      : v.type === "array" ? [`${k}のサンプル`]
-      : `${k}のサンプル`;
+    o[k] = 偽の値(v, k, 印);
   }
   return o;
 }
@@ -77,7 +112,8 @@ const ctx = {
     if (呼んだ数 > 1000) throw new Error("エージェントが1000体を超えました（実行側の上限）");
     // 公式仕様: agent() は中断・回復不能なAPIエラーのとき null を返す
     if (落とす間隔 && 呼んだ数 % 落とす間隔 === 0) { 落とした数++; return null; }
-    return 偽の返事(opts.schema, 全部合格 ? "KEEP" : "DROP");
+    // 体ごとに違う値にする。同じ値だと整理で畳まれ、下流の体数が本番より少なく見える。
+    return 偽の返事(opts.schema, 全部合格 ? "KEEP" : "DROP", `#${呼んだ数}`);
   },
   parallel: async (ts) => {
     if (!Array.isArray(ts)) throw new Error("parallel には配列を渡します");
