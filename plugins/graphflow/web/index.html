@@ -7,38 +7,47 @@
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%231B1E21'/><path d='M3 8h3M10 5h3M10 11h3M6 8l4-3M6 8l4 3' stroke='%23F1F2F4' stroke-width='1.2' fill='none'/><circle cx='13.4' cy='3' r='2' fill='%23D0342C'/></svg>">
 <style>
 :root{
+  color-scheme:light;
   --ground:#F1F2F4; --panel:#E7E9EC; --sunk:#DCDFE3;
   --ink:#1B1E21; --ink-2:#5A6167; --ink-3:#878E95;
   --line:#A9AFB5; --line-2:#C7CCD1;
   --shu:#D0342C; --shu-soft:#F6DDDA;
   --ai:#17456B; --ai-soft:#D9E4EE;
   --ok:#2F6B4F;
+  /* 濃い地の上に置く文字色。暗色では地が明るくなるので白では読めない */
+  --on-ai:#fff; --on-shu:#fff;
   --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
   --sans:"Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic",YuGothic,"Noto Sans JP",system-ui,sans-serif;
 }
 @media (prefers-color-scheme:dark){
   :root{
+    color-scheme:dark;
     --ground:#15181A; --panel:#1E2225; --sunk:#101315;
     --ink:#E3E7EA; --ink-2:#9BA3AA; --ink-3:#6E777E;
     --line:#464E54; --line-2:#333A3F;
     --shu:#FF6B57; --shu-soft:#3A211D;
     --ai:#7FB2DE; --ai-soft:#1B2A38;
     --ok:#6FBF97;
+    --on-ai:#0E1418; --on-shu:#241009;
   }
 }
 :root[data-theme="light"]{
+  color-scheme:light;
   --ground:#F1F2F4; --panel:#E7E9EC; --sunk:#DCDFE3;
   --ink:#1B1E21; --ink-2:#5A6167; --ink-3:#878E95;
   --line:#A9AFB5; --line-2:#C7CCD1;
   --shu:#D0342C; --shu-soft:#F6DDDA;
   --ai:#17456B; --ai-soft:#D9E4EE; --ok:#2F6B4F;
+  --on-ai:#fff; --on-shu:#fff;
 }
 :root[data-theme="dark"]{
+  color-scheme:dark;
   --ground:#15181A; --panel:#1E2225; --sunk:#101315;
   --ink:#E3E7EA; --ink-2:#9BA3AA; --ink-3:#6E777E;
   --line:#464E54; --line-2:#333A3F;
   --shu:#FF6B57; --shu-soft:#3A211D;
   --ai:#7FB2DE; --ai-soft:#1B2A38; --ok:#6FBF97;
+  --on-ai:#0E1418; --on-shu:#241009;
 }
 
 *{box-sizing:border-box}
@@ -104,6 +113,10 @@ main{flex:1;display:grid;grid-template-columns:190px minmax(0,1fr) 326px;min-hei
 
 /* ── 図面（キャンバス）───────────────────────────── */
 .canvas-wrap{position:relative;overflow:auto;height:100%;background:var(--sunk)}
+/* ドラッグ中、ここが受け皿だと分かるようにする */
+.canvas-wrap.drop-here{outline:2px dashed var(--ai);outline-offset:-3px}
+.part{cursor:grab}
+.part:active{cursor:grabbing}
 .canvas-inner{position:relative;padding:26px;min-width:100%;width:max-content}
 svg.wire{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
 svg.wire path{fill:none;stroke:var(--ink-3);stroke-width:1.6}
@@ -134,9 +147,10 @@ svg.wire polygon.check{fill:var(--line)}
 }
 .loop-cap{
   position:absolute;top:-1px;left:-1px;display:flex;align-items:baseline;gap:10px;
-  padding:2px 9px;background:var(--ai);color:#fff;flex-wrap:wrap;max-width:calc(100% + 2px);
+  padding:2px 9px;background:var(--ai);color:var(--on-ai);flex-wrap:wrap;max-width:calc(100% + 2px);
 }
-.loop-cap .stencil{color:#fff}
+.loop-cap .stencil{color:var(--on-ai)}
+.loop-cap.bad,.loop-cap.bad .stencil{color:var(--on-shu)}
 .loop-cap.bad{background:var(--shu)}
 .loop-cond,.loop-judge{font-size:10.5px;white-space:nowrap}
 .loop-judge{opacity:.85}
@@ -192,7 +206,7 @@ svg.wire polygon.check{fill:var(--line)}
 .howto-line{font-family:var(--mono);font-size:11.5px;word-break:break-all;line-height:1.7}
 .howto-line .cmd{color:var(--ink)}
 .howto-line .slot{
-  margin-left:6px;padding:1px 6px;background:var(--ai);color:#fff;
+  margin-left:6px;padding:1px 6px;background:var(--ai);color:var(--on-ai);
   border-radius:2px;font-family:var(--sans);font-size:11px;
 }
 .howto small{display:block;margin-top:5px}
@@ -213,7 +227,7 @@ svg.wire polygon.check{fill:var(--line)}
   font-family:var(--mono);font-size:10px;color:var(--ink-2);word-break:break-all;line-height:1.7;
 }
 .in-call .slot{
-  padding:1px 5px;background:var(--ai);color:#fff;border-radius:2px;
+  padding:1px 5px;background:var(--ai);color:var(--on-ai);border-radius:2px;
   font-family:var(--sans);font-size:10px;
 }
 
@@ -221,7 +235,7 @@ svg.wire polygon.check{fill:var(--line)}
 .shu-mark{
   position:absolute;top:-9px;right:-9px;z-index:2;
   min-width:19px;height:19px;padding:0 5px;border-radius:50%;
-  background:var(--shu);color:#fff;
+  background:var(--shu);color:var(--on-shu);
   font-family:var(--mono);font-size:11px;font-weight:700;line-height:19px;text-align:center;
 }
 .empty-canvas{color:var(--ink-3);font-size:13px;max-width:46ch;padding:34px 6px}
@@ -290,8 +304,8 @@ textarea.in{resize:vertical;min-height:56px;line-height:1.6}
 .tb-list{overflow-y:auto;max-height:110px;padding:6px 14px;border-right:1px solid var(--line-2)}
 /* 指摘から飛んだ部品を一瞬光らせる。目で探させないため */
 @keyframes flash{0%,100%{box-shadow:none}30%,70%{box-shadow:0 0 0 4px var(--shu)}}
-.node.flash{animation:flash .9s ease-in-out}
-@media (prefers-reduced-motion:reduce){.node.flash{animation:none;box-shadow:0 0 0 4px var(--shu)}}
+.flash{animation:flash .9s ease-in-out}
+@media (prefers-reduced-motion:reduce){.flash{animation:none;box-shadow:0 0 0 4px var(--shu)}}
 .finding{
   display:flex;gap:8px;align-items:baseline;font-size:11.5px;line-height:1.5;
   padding:1px 0;cursor:pointer;background:none;border:0;text-align:left;width:100%;
@@ -309,7 +323,7 @@ textarea.in{resize:vertical;min-height:56px;line-height:1.6}
   background:transparent;color:var(--ink-3);border-color:var(--line);
   cursor:not-allowed;letter-spacing:.22em;
 }
-.issue:not([disabled]):hover{background:var(--ai);border-color:var(--ai);color:#fff}
+.issue:not([disabled]):hover{background:var(--ai);border-color:var(--ai);color:var(--on-ai)}
 @media (prefers-reduced-motion:no-preference){
   .issue:not([disabled]){animation:ready .45s ease-out}
   @keyframes ready{from{transform:scale(.94);opacity:.4}to{transform:none;opacity:1}}
@@ -340,19 +354,37 @@ pre{
 }
 .dlg-ft{display:flex;gap:9px;align-items:center;padding:11px 18px;border-top:1px solid var(--line);background:var(--panel);flex-wrap:wrap}
 .dlg-ft .stencil{margin-right:auto}
-.solid{background:var(--ai);border:1px solid var(--ai);color:#fff;padding:6px 15px;cursor:pointer;font-family:var(--mono);font-size:11.5px}
+.solid{background:var(--ai);border:1px solid var(--ai);color:var(--on-ai);padding:6px 15px;cursor:pointer;font-family:var(--mono);font-size:11.5px}
 .solid:hover{filter:brightness(1.12)}
 .saved{color:var(--ok);font-family:var(--mono);font-size:11.5px}
 
 @media (max-width:1080px){
-  main{grid-template-columns:1fr;grid-template-rows:auto minmax(280px,1fr) auto}
+  /* 行は「図面・部品箱・詳細」の見た目の順に割り当てる。
+     order だけに頼ると自動配置がDOM順で行を掴み、図面が auto 行に落ちて潰れる。 */
+  main{grid-template-columns:1fr;grid-template-rows:minmax(0,2fr) minmax(0,1fr) minmax(0,1.2fr)}
+  /* nowrap のままだと凡例が画面の外で切れて読めない */
+  .grid-note{padding:6px 14px;align-items:flex-start}
+  .grid-note .legend,.grid-note #scale-note{white-space:normal}
   .col.left,.col.right{border:0;border-top:1px solid var(--line)}
-  .col.left{order:2}.canvas-wrap{order:1}.col.right{order:3;max-height:44dvh}
+  .canvas-wrap{grid-row:1;order:1}
+  .col.left{grid-row:2;order:2}
+  .col.right{grid-row:3;order:3}
   .titleblock{grid-template-columns:repeat(2,1fr)}
   .tb-list{grid-column:1/-1;max-height:90px}
   .tb-actions{grid-column:1/-1}
 }
 </style>
+<script>
+/* 描画前に配色を確定させる。後から当てると一瞬もう片方の色が出る。 */
+(function(){
+  var t = null;
+  try { t = localStorage.getItem("graphflow.theme"); } catch (e) {}
+  if (t !== "dark" && t !== "light") {
+    t = window.matchMedia && window.matchMedia("(prefers-color-scheme:dark)").matches ? "dark" : "light";
+  }
+  document.documentElement.setAttribute("data-theme", t);
+})();
+</script>
 </head>
 <body>
 <div class="app">
@@ -565,6 +597,7 @@ function blank() {
    ・古い版で保存した図面（繰り返しを持たない等）を開けるようにする
    ・手で編集されて壊れた図面（存在しないIDを指す線など）で落ちないようにする */
 const OUT_TYPES = ["string", "number", "boolean", "array"];
+let 読み落とし = 0;      // 直近の normalize() で捨てた部品の数
 function normalize(d) {
   const base = blank();
   const c = (d && d.caps) || {};
@@ -587,8 +620,10 @@ function normalize(d) {
     nodes: [],
   };
   const ids = new Set();
+  読み落とし = 0;
   (Array.isArray(d.nodes) ? d.nodes : []).forEach(n => {
-    if (!n || typeof n.id !== "string" || ids.has(n.id) || !KIND[n.kind]) return;
+    // 読めなかった部品は黙って捨てない。何件落ちたかを持ち帰って、読んだ人に伝える。
+    if (!n || typeof n.id !== "string" || ids.has(n.id) || !KIND[n.kind]) { 読み落とし++; return; }
     ids.add(n.id);
     s.nodes.push({
       id: n.id, kind: n.kind,
@@ -687,16 +722,19 @@ function newNode(kind) {
    ここが本体。指摘(block)が1件でもあれば書き出せない。 */
 function inspect() {
   const f = [];
-  const push = (code, msg, node, warn) => f.push({ code, msg, node: node || null, warn: !!warn });
+  /* at = 部品に紐づかない指摘の「直す場所」。押したらそこへ案内する。
+     ここが無いと、指摘を押しても何も起きない（無反応）ものが混ざる。 */
+  const push = (code, msg, node, warn, at) =>
+    f.push({ code, msg, node: node || null, warn: !!warn, at: at || null });
   const byId = Object.fromEntries(S.nodes.map(n => [n.id, n]));
   const work = S.nodes.filter(n => n.kind !== "gate");
 
   if (!/^[a-z0-9][a-z0-9-]*$/.test(S.name))
-    push("K-1", "図面名は英小文字・数字・ハイフンだけ。そのままコマンド名になります", null);
+    push("K-1", "図面名は英小文字・数字・ハイフンだけ。そのままコマンド名になります", null, false, "#f-name");
   if (!S.goal.trim())
-    push("K-2", "目的が空です。統合ノードが何に向かって仕上げるか決まりません", null);
+    push("K-2", "目的が空です。統合ノードが何に向かって仕上げるか決まりません", null, false, "#f-goal");
   if (!S.nodes.length)
-    push("K-3", "ノードがありません。左の部品箱から置いてください", null);
+    push("K-3", "ノードがありません。左の部品箱から置いてください", null, false, '.part[data-k="single"]');
 
   for (const n of S.nodes) {
     const at = n.title || KIND[n.kind].ja;
@@ -782,14 +820,15 @@ function inspect() {
   if (work.length && !S.nodes.some(n => n.kind === "verify"))
     push("K-15", "検証ノードがありません。作業者だけを100体並べても誤りは100件に増えるだけです。部品箱から「検証」を置き、誰を検証するかを指定してください", null);
   if (!S.anchors.filter(a => a.trim()).length)
-    push("K-16", "アンカーが未宣言です。何をもって正しいとするかが決まっていません。左の「アンカー」に、AIが言い訳できない現実を1つ以上書いてください（例: テストが通った / 入金された）", null);
-  if (!S.caps.max) push("K-17", "総エージェント数の上限が未設定です", null);
-  if (S.caps.max > 1000) push("K-18", "総エージェント数が実行側の上限1000を超えています", null);
-  if (S.caps.conc > 16) push("K-19", "並列数が実行側の同時実行上限16を超えています（しかも16は上限で、実機ではコア数−2まで落ちます）", null);
+    push("K-16", "アンカーが未宣言です。何をもって正しいとするかが決まっていません。左の「アンカー」に、AIが言い訳できない現実を1つ以上書いてください（例: テストが通った / 入金された）",
+      null, false, "#anchors input, #btn-anchor");
+  if (!S.caps.max) push("K-17", "総エージェント数の上限が未設定です", null, false, "#f-cap");
+  if (S.caps.max > 1000) push("K-18", "総エージェント数が実行側の上限1000を超えています", null, false, "#f-cap");
+  if (S.caps.conc > 16) push("K-19", "並列数が実行側の同時実行上限16を超えています（しかも16は上限で、実機ではコア数−2まで落ちます）", null, false, "#f-conc");
 
   const est = estimate();
   if (S.caps.max && est > S.caps.max)
-    push("K-20", `見積り${est}体が自分で決めた上限${S.caps.max}体を超えています`, null);
+    push("K-20", `見積り${est}体が自分で決めた上限${S.caps.max}体を超えています`, null, false, "#f-cap");
   // 見積りは設計時の数。並列と検証は上流の返却件数ぶん動くので、実行時はこれを上回りうる。
   // 上限に達したら書き出したコードが自分で止まるが、切り捨てが起きること自体は先に伝える。
   if (S.caps.max && est > S.caps.max * 0.8 && est <= S.caps.max)
@@ -1020,9 +1059,10 @@ const FOCUSABLE = 'a[href],button,input,select,textarea,[role="button"],[tabinde
 const FOCUS_BOXES = "#inspector,#tb-list,#loopctl,#anchors,.col.left,header,.titleblock";
 function focusKey(e) {
   if (!e || e === document.body || !e.closest) return null;
-  const node = e.closest(".node");
-  if (node && node.dataset.nid)
-    return { q: `#canvas .node[data-nid="${node.dataset.nid}"]` + (e.classList.contains("node-x") ? " .node-x" : "") };
+  // 図面の札（部品と、起動時の入力の箱）は、番号ではなく id で戻す
+  const 札 = e.closest(".node,.in-box");
+  if (札 && 札.dataset.nid)
+    return { q: `#canvas [data-nid="${札.dataset.nid}"]` + (e.classList.contains("node-x") ? " .node-x" : "") };
   const box = e.closest(FOCUS_BOXES);
   if (!box) return null;
   const i = [...box.querySelectorAll(FOCUSABLE)].indexOf(e);
@@ -1050,6 +1090,7 @@ function render() {
   $("#f-goal").value = S.goal;
   $("#f-cap").value = S.caps.max || "";
   $("#f-conc").value = S.caps.conc || "";
+  refreshDialog();          // 開いたままの書き出しを、いまの図面に合わせ直す
   if (keep && document.activeElement === document.body) restoreFocus(keep);
 }
 
@@ -1091,6 +1132,9 @@ function inputBox() {
     x.setAttribute("aria-label", "起動時の入力をやめる");
     x.onclick = e => {
       e.stopPropagation();
+      /* 部品の「×」は戻せるのに、同じ見た目のこれだけ戻せなかった。
+         名前・説明・呼び出し例がまとめて取り消し不能で消えていた。 */
+      snapshot();
       S.input = { name: "", desc: "", sample: "" }; sel = null; render();
     };
     top.appendChild(x);
@@ -1118,7 +1162,8 @@ function drawCanvas() {
       c.appendChild(row);
     }
     const e = el("div", "empty-canvas");
-    e.innerHTML = "左の<b>部品箱</b>から部品を置くと、依存の深さで図面が自動で起きます。<br><br>"
+    e.innerHTML = "左の<b>部品箱</b>の部品を<b>押す</b>か、ここへ<b>ドラッグ</b>すると置けます。"
+      + "置くと、依存の深さで図面が自動で起きます。<br><br>"
       + "描く順番ではなく<b>依存だけ</b>が段を決めます。前の結果を必要としない仕事は、勝手に同じ段に並びます。"
       + "<br><br>迷ったら上の<code>ひな形</code>から実物を1枚読んでください。";
     c.appendChild(e);
@@ -1314,6 +1359,9 @@ function insertPicker(label, title, onPick) {
    その段の部品は新しい部品を待つようになる（＝段がひとつ下がる）。
    もとの依存は消さない。消すと整理ノードが素材を見失う。 */
 function insertStageBefore(group, kind) {
+  /* 🔴 控えを取らずに挿入すると、⌘Z が1つ前の削除に当たって2手ぶん戻る。
+     「直前の1手だけ戻る」を守るために、挿入も1手として控える。 */
+  snapshot();
   const inherited = [...new Set(group.flatMap(n => n.deps))];
   const n = newNode(kind || "single");
   n.deps = inherited;
@@ -1335,18 +1383,31 @@ function insertStageBefore(group, kind) {
   sel = n.id;
   render();
   document.querySelector(".col.right").scrollTop = 0;
+  /* 入れた部品を、図面の中で見えるところまで送ってから、そこにフォーカスを置く。
+     以前は右パネルだけが変わり、フォーカスは body（または番号のずれた別ボタン）へ
+     落ちていたので、どこに何が入ったのか図でも指でも辿れなかった。 */
+  図面に映す(n.id);
+  document.querySelector(`#canvas .node[data-nid="${n.id}"]`)?.focus();
 }
 
 /* あとから種類を変える。種類ごとに要らない項目は落とす。 */
 function changeKind(n, k) {
   if (n.kind === k) return;
+  snapshot();                  // 種類を変えると項目が落ちる。1手だけ戻せるようにする
   n.kind = k;
   n.items = k === "fanout" ? (n.items || []) : null;
   n.countCheck = k === "reduce";
   if (k === "verify") { if (!n.target) n.target = n.deps[0] || ""; }
   else { n.target = ""; n.lens = ""; }
-  if (k === "gate") n.outputs = [];
-  else if (!n.outputs || !n.outputs.length) n.outputs = [{ name: "", type: "string" }];
+  /* 🔴 人間ゲートに変えた瞬間に契約を捨てていたので、種類を戻しても復元できなかった。
+     ゲートは契約を使わないだけで、捨てる理由はない。持ったまま隠す。 */
+  if (k !== "gate" && (!n.outputs || !n.outputs.length)) n.outputs = [{ name: "", type: "string" }];
+  /* 繰り返しの端がゲートになったら、その繰り返しはもう成立しない。
+     「どの段から＝—」だけ残して設定が生きていると、直しようが画面から分からない。 */
+  if (k === "gate" && S.loop && (S.loop.from === n.id || S.loop.to === n.id)) {
+    S.loop = { from: "", to: "", max: S.loop.max, dry: S.loop.dry };
+    知らせる("人間ゲートに変えたので、繰り返しの設定を解除しました");
+  }
   render();
 }
 
@@ -1361,6 +1422,10 @@ function removeNode(id) {
   S.nodes = S.nodes.filter(x => x.id !== id);
   S.nodes.forEach(x => {
     x.deps = x.deps.filter(d => d !== id);
+    /* 🔴 基準(basis)を片付け忘れると、消えた部品のIDを持ったままになる。
+       画面には「渡せる部品がありません」と出るのに、点検の「基準が空か」は
+       すり抜けて、基準の無い検証をそのまま書き出せてしまう。 */
+    x.basis = x.basis.filter(b => b !== id);
     if (x.target === id) x.target = "";
   });
   // 繰り返しの端になっていた部品なら、繰り返しの設定も片付ける
@@ -1369,6 +1434,23 @@ function removeNode(id) {
   render();
   const f = nextFocus && document.querySelector(`#canvas .node[data-nid="${nextFocus}"]`);
   (f || document.querySelector("#canvas")).focus?.();
+}
+
+/* 置いた・入れた部品が表示枠の外だと「押しても何も起きない」ように見える。
+   図面の枠の中に入るところまでだけ送る（ページ全体は動かさない）。 */
+function 図面に映す(id) {
+  const w = document.querySelector(".canvas-wrap");
+  const t = w && w.querySelector(`[data-nid="${id}"]`);
+  if (!t) return;
+  const 余白 = 20;
+  const 頭 = w.querySelector(".grid-note");       // sticky なので、その下に出す
+  let wr = w.getBoundingClientRect(), tr = t.getBoundingClientRect();
+  const 上端 = (頭 ? 頭.getBoundingClientRect().bottom : wr.top) + 余白;
+  if (tr.bottom > wr.bottom - 余白) w.scrollTop += tr.bottom - (wr.bottom - 余白);
+  else if (tr.top < 上端) w.scrollTop -= 上端 - tr.top;
+  wr = w.getBoundingClientRect(); tr = t.getBoundingClientRect();
+  if (tr.right > wr.right - 余白) w.scrollLeft += tr.right - (wr.right - 余白);
+  else if (tr.left < wr.left + 余白) w.scrollLeft -= (wr.left + 余白) - tr.left;
 }
 
 /* ══ 右欄 ══════════════════════════════════════════════ */
@@ -1419,13 +1501,19 @@ function drawInspector() {
       /* 🔴 「何件返る想定か」は飾りではない。下流の検証はこの件数ぶん体が立つので、
          ここが見積りと上限の目盛りになる。空回しの --each と同じ数。 */
       if (n.multi) {
+        // 欄・目安・保存される値は必ず同じ数を指す。打った端から目安も書き換える。
+        const 目安 = note("");
+        const 目安を書く = () => {
+          const 体 = Math.max(1, n.items.filter(Boolean).length);
+          const 件 = Math.max(1, n.each || 1);
+          目安.textContent = `目安: この段は${体}体で、合わせて約${体 * 件}件を下流へ流します。`
+            + `空回しで確かめるときは --each ${件} を付けてください。`;
+        };
         sect.appendChild(num("1体あたり何件くらい返る想定か", n.each,
-          v => { n.each = Math.max(1, v || 1); },
-          "下流の検証はこの件数ぶん体が立ちます。見積りと上限の判定がこの数で決まります"));
-        const 立つ = Math.max(1, n.items.filter(Boolean).length) * Math.max(1, n.each || 1);
-        sect.appendChild(note(`目安: この段は${Math.max(1, n.items.filter(Boolean).length)}体で、`
-          + `合わせて約${立つ}件を下流へ流します。`
-          + `空回しで確かめるときは --each ${n.each} を付けてください。`));
+          v => { n.each = Math.max(1, v || 1); 目安を書く(); },
+          "下流の検証はこの件数ぶん体が立ちます。見積りと上限の判定がこの数で決まります", true));
+        目安を書く();
+        sect.appendChild(目安);
       }
       sect.appendChild(note(n.multi
         ? "1体が見つけた分だけ返します。次の段には、体ではなく件がそのまま並んで渡ります。"
@@ -1467,8 +1555,10 @@ function drawInspector() {
             if (on) n.basis = n.basis.filter(i => i !== x.id);
             else {
               n.basis = [...n.basis, x.id];
-              // 基準を読む＝依存でもある。線が無いと順番が保証されない。
-              if (!n.deps.includes(x.id)) { n.deps.push(x.id); n.edgeChecked = true; }
+              /* 基準を読む＝依存でもある。線が無いと順番が保証されない。
+                 🔴 ただし「確認した」を機械が勝手に立て直してはいけない。
+                    人が外したチェックが戻り、増えたばかりの線まで確認済みにされる。 */
+              if (!n.deps.includes(x.id)) { n.deps.push(x.id); n.edgeChecked = false; }
             }
             render();
           };
@@ -1504,7 +1594,17 @@ function drawInspector() {
       row.appendChild(sel_(null, o.type, [["string", "string"], ["number", "number"],
         ["boolean", "boolean"], ["array", "array"]], v => o.type = v, true));
       const x = el("button", "mini", "×");
-      x.onclick = () => { n.outputs.splice(i, 1); render(); };
+      x.title = `契約の項目「${o.name || "（無題）"}」を消す`;
+      x.onclick = () => {
+        snapshot();                       // 打ち間違いで消した項目名を1手で戻せるように
+        n.outputs.splice(i, 1); render();
+        /* 消した行の「すぐ近く」へフォーカスを戻す。
+           番号で戻す仕組みだと、行が減った分だけずれて無関係のボタンに着地する。 */
+        const ms = [...document.querySelectorAll("#inspector .pair .mini")];
+        const 次 = ms[Math.min(i, ms.length - 1)]
+          || [...document.querySelectorAll("#inspector .add")].find(b => b.textContent.includes("項目"));
+        次 && 次.focus();
+      };
       row.appendChild(x);
       cs.appendChild(row);
     });
@@ -1532,7 +1632,16 @@ function drawInspector() {
       box.appendChild(el("span", "stencil", "よく使う書き方（押すと入ります）"));
       見本.forEach(t => {
         const b = el("button", "sample-btn", t);
-        b.onclick = () => { n.fail = t; render(); };
+        /* 🔴 自分で書いた文章を無警告で丸ごと置き換えていた。
+           中身があって、しかも別の文章のときだけ聞く。 */
+        b.onclick = async () => {
+          const 今 = n.fail.trim();
+          if (今 && 今 !== t && !await 確かめる(
+            "いま書いてある「できなかったときどうするか」を、この見本で置き換えますか？",
+            `今の文章: ${今.length > 40 ? 今.slice(0, 40) + "…" : 今}`, "置き換える")) return;
+          snapshot();
+          n.fail = t; render();
+        };
         box.appendChild(b);
       });
       cs.appendChild(box);
@@ -1566,7 +1675,15 @@ function drawInspector() {
     t.title = `${x.title || KIND[x.kind].ja} → ${自分}`;
     t.onclick = () => {
       const i = n.deps.indexOf(x.id);
-      i < 0 ? n.deps.push(x.id) : n.deps.splice(i, 1);
+      if (i < 0) n.deps.push(x.id);
+      else {
+        n.deps.splice(i, 1);
+        /* 🔴 線を外したのに「検証する相手」「判定の基準」が中を向いたままだと、
+           欄には「—」と出るのに点検はその相手を名指しする（しかも候補から消えるので
+           選び直せない）。線と一緒に外す。 */
+        if (n.target === x.id) n.target = "";
+        n.basis = n.basis.filter(b => b !== x.id);
+      }
       n.edgeChecked = false; render();
     };
     wrap.appendChild(t);
@@ -1687,9 +1804,9 @@ function check(label, val, on, sub) {
   l.appendChild(s); return l;
 }
 function note(t) { return el("p", "hint", t); }
-function num(label, val, on, hint) {
+function num(label, val, on, hint, 丸める) {
   const l = el("label", "f"); l.appendChild(el("span", "stencil", label));
-  l.appendChild(numin(val, on));
+  l.appendChild(numin(val, on, 丸める));
   if (hint) l.appendChild(el("small", "hint", hint));
   return l;
 }
@@ -1734,10 +1851,17 @@ function drawInputControls(w) {
   l1.appendChild(inp(S.input.name, "例: テーマ / 対象ファイル / 顧客名",
     v => { S.input.name = v; 見本を更新(); }));
   w.appendChild(l1);
-  if (!S.input.name.trim()) {
+  /* 🔴 呼び名が空という理由だけで、書いてある説明と例の欄ごと隠していた。
+     データは残っているのに画面から見えず、直すことも消すこともできなくなる。
+     まだ何も書かれていないときだけ、案内に畳む。 */
+  if (!S.input.name.trim() && !S.input.desc.trim() && !S.input.sample.trim()) {
     w.appendChild(el("p", "hint", "呼び名を入れると、渡し方の説明と例を書けます。"));
     return;
   }
+  if (!S.input.name.trim())
+    w.appendChild(el("p", "hint",
+      "⚠ 呼び名が空です。このままでは図面に出ず、書き出しにも入りません。"
+      + "名前を入れ直すか、下の「受け取らないようにする」で消してください。"));
   const l2 = el("label", "f");
   l2.appendChild(el("span", "stencil", "渡す人への説明"));
   const t = el("textarea", "in");
@@ -1765,7 +1889,7 @@ function drawInputControls(w) {
   w.appendChild(使い方);
 
   const off = el("button", "add danger", "受け取らないようにする");
-  off.onclick = () => { S.input = { name: "", desc: "", sample: "" }; render(); };
+  off.onclick = () => { snapshot(); S.input = { name: "", desc: "", sample: "" }; render(); };
   w.appendChild(off);
 }
 
@@ -1782,21 +1906,34 @@ function drawLoopControls() {
   }
   const a = el("label", "f");
   a.appendChild(el("span", "stencil", "最大 何周まで"));
-  a.appendChild(numin(S.loop.max, v => S.loop.max = v));
+  a.appendChild(numin(S.loop.max, v => S.loop.max = v, true));
   w.appendChild(a);
   const b = el("label", "f");
   b.appendChild(el("span", "stencil", "何周 空回りしたら終了"));
-  b.appendChild(numin(S.loop.dry, v => S.loop.dry = v));
+  b.appendChild(numin(S.loop.dry, v => S.loop.dry = v, true));
   b.appendChild(el("small", "hint", "新しい指摘が出なかった周を数えます"));
   w.appendChild(b);
   const off = el("button", "add danger", "繰り返しをやめる");
   off.onclick = () => { S.loop = { from: "", to: "", max: 5, dry: 2 }; render(); };
   w.appendChild(off);
 }
-function numin(val, on) {
+/* 🔴 min / max は「見た目の上の飾り」でしかない。type=number の欄は
+   範囲外の値をそのまま持てるので、欄の数字・下の目安・保存される値が食い違う。
+   打った端から実際に丸め、欄の表示も同時に直す。 */
+function numin(val, on, 丸める) {
   const i = el("input", "in"); i.type = "number"; i.min = "1"; i.max = "50";
   i.value = val || "";
-  i.oninput = () => { on(+i.value || 0); scheduleRender(); };
+  const 収める = () => {
+    if (i.value === "") return 0;                 // 打ち込み途中の空欄は触らない
+    let v = Math.floor(+i.value);
+    if (!Number.isFinite(v)) v = +i.min;
+    v = Math.min(+i.max, Math.max(+i.min, v));
+    if (String(v) !== i.value) i.value = String(v);
+    return v;
+  };
+  i.oninput = () => { on(丸める ? 収める() : (+i.value || 0)); scheduleRender(); };
+  // 空のまま離れたら下限に寄せる（保存される値と欄の見た目を必ず合わせる）
+  i.onchange = () => { if (丸める && i.value === "") { i.value = i.min; on(+i.min); scheduleRender(); } };
   return i;
 }
 
@@ -1806,7 +1943,15 @@ function drawAnchors() {
     const row = el("div", "pair"); row.style.gridTemplateColumns = "1fr 26px";
     row.appendChild(inp(a, "例: テストが通った / 入金された", v => S.anchors[i] = v));
     const x = el("button", "mini", "×");
-    x.onclick = () => { S.anchors.splice(i, 1); render(); };
+    x.title = "このアンカーを消す";
+    x.setAttribute("aria-label", `アンカー${i + 1}行目を消す`);
+    x.onclick = () => {
+      snapshot();                        // 消したアンカーも1手で戻せるようにする
+      S.anchors.splice(i, 1); render();
+      // 続けて整理できるよう、隣の行か「＋ 追加」へフォーカスを渡す
+      const ms = [...document.querySelectorAll("#anchors .mini")];
+      (ms[Math.min(i, ms.length - 1)] || $("#btn-anchor")).focus();
+    };
     row.appendChild(x); w.appendChild(row);
   });
 }
@@ -1821,7 +1966,11 @@ function drawTitleBlock() {
     block.length ? "flag" : "pass");
   const ac = S.anchors.filter(a => a.trim()).length;
   set("#tb-anchor", ac ? `${ac}件` : "未", ac ? "pass" : "flag");
-  set("#tb-cap", S.caps.max ? `${estimate()} / ${S.caps.max}` : "未", S.caps.max ? "" : "flag");
+  /* 🔴 上限を超えている数字を出しているのはこのタイルなのに、黒いままだった。
+     どこが悪いのかを一目で分からせる。 */
+  const 見積り = estimate();
+  set("#tb-cap", S.caps.max ? `${見積り} / ${S.caps.max}` : "未",
+    !S.caps.max || 見積り > S.caps.max ? "flag" : "");
   set("#tb-gate", S.nodes.length ? `${segments().length || 1}枚` : "—");
 
   const list = $("#tb-list"); list.textContent = "";
@@ -1832,12 +1981,21 @@ function drawTitleBlock() {
     /* 指摘を押したら、その部品まで図面を動かして光らせる。
        どこが悪いのかを目で探させない。 */
     b.onclick = () => {
-      if (!f.node) return;
+      const 動き = matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+      if (!f.node) {
+        // 部品に紐づかない指摘（図面名・目的・アンカー・上限）は、直す欄そのものへ案内する
+        const t = f.at && document.querySelector(f.at);
+        if (!t) return;
+        t.scrollIntoView({ block: "center", behavior: 動き });
+        t.classList.add("flash");
+        setTimeout(() => t.classList.remove("flash"), 900);
+        t.focus?.();
+        return;
+      }
       sel = f.node.id; render();
       const t = document.querySelector(`#canvas .node[data-nid="${f.node.id}"]`);
       if (t) {
-        t.scrollIntoView({ block: "center", inline: "center",
-          behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+        t.scrollIntoView({ block: "center", inline: "center", behavior: 動き });
         t.classList.add("flash");
         setTimeout(() => t.classList.remove("flash"), 900);
       }
@@ -1860,6 +2018,10 @@ function drawTitleBlock() {
    逃がさないと「価格は ${価格} 円」がJavaScriptの式として評価され、
    構文は通るのに実行時に壊れる／意図しない値が混ざる。
    \ も先に逃がさないと、\` のような入力で順番が狂う。 */
+/* 空白だけの行を落とし、前後の空白も落とした「実際に効くアンカー」。
+   点検・件数表示・書き出しが同じ物差しを使うための1か所。 */
+function 生きたアンカー() { return S.anchors.map(a => String(a ?? "").trim()).filter(Boolean); }
+
 function lit(s) {
   return String(s ?? "")
     .replace(/\\/g, "\\\\")
@@ -1887,10 +2049,12 @@ function promptOf(n) {
   L.push(lit(n.job.trim()));
   L.push("");
   L.push("GOAL: " + lit(S.goal.trim()));
-  if (S.anchors.filter(Boolean).length) {
+  /* 🔴 空白だけの行は「無い」のと同じ。画面の件数は無視しているのに、
+     書き出したコードには中身のない箇条書きが並んでいた。同じ物差しで数える。 */
+  if (生きたアンカー().length) {
     L.push("");
     L.push("ANCHOR — 何をもって正しいとするか:");
-    S.anchors.filter(Boolean).forEach(a => L.push("- " + lit(a)));
+    生きたアンカー().forEach(a => L.push("- " + lit(a)));
   }
   if (n.fail.trim()) { L.push(""); L.push("FAIL: " + lit(n.fail.trim())); }
   return L.join("\n");
@@ -1968,9 +2132,9 @@ function generate() {
       L.push("}");
       L.push("");
     }
-    if (S.anchors.filter(Boolean).length) {
+    if (生きたアンカー().length) {
       L.push("// アンカー（AIの合意ではなく現実の証拠）:");
-      S.anchors.filter(Boolean).forEach(a => L.push("//   - " + a));
+      生きたアンカー().forEach(a => L.push("//   - " + a));
       L.push("");
     }
     L.push(`const CAP = ${S.caps.max}   // 総エージェント数の上限`);
@@ -2336,11 +2500,35 @@ function issue() {
   tabs = [...gen, { file: S.name + ".graphflow.json", code: JSON.stringify(S, null, 2) }];
   cur = 0; drawDialog(); $("#dlg").showModal();
 }
+/* 開いたままの書き出しは、図面が変われば嘘になる。
+   ⌘Z で図面が戻ったのに古いコードのまま「保存しました」と言うのが一番たちが悪い。 */
+function refreshDialog() {
+  const d = $("#dlg");
+  if (!d.open) return;
+  const 効かない = ["#dlg-save", "#dlg-copy", "#dlg-dl"];
+  const block = findings.filter(f => !f.warn).length;
+  if (block || !S.nodes.length) {
+    効かない.forEach(s => $(s).disabled = true);
+    $("#dlg-msg").textContent =
+      `図面が変わって、いまは書き出せない状態です（点検 ${block}件）。閉じて図面を直してください。`;
+    return;
+  }
+  const 前 = tabs[cur] && tabs[cur].file;
+  tabs = [...generate(), { file: S.name + ".graphflow.json", code: JSON.stringify(S, null, 2) }];
+  const i = tabs.findIndex(x => x.file === 前);
+  cur = i >= 0 ? i : 0;
+  drawDialog();
+  効かない.forEach(s => $(s).disabled = false);
+  $("#dlg-msg").textContent = "図面が変わったので、書き出す中身を作り直しました";
+}
+
 function drawDialog() {
   const t = $("#dlg-tabs"); t.textContent = "";
   tabs.forEach((x, i) => {
     const b = el("button", "tab" + (i === cur ? " on" : ""), x.file);
-    b.onclick = () => { cur = i; drawDialog(); };
+    b.setAttribute("aria-pressed", i === cur ? "true" : "false");
+    // 押したタブにフォーカスを残す。でないとタブを見るたび先頭から押し直しになる
+    b.onclick = () => { cur = i; drawDialog(); $("#dlg-tabs").children[i]?.focus(); };
     t.appendChild(b);
   });
   $("#dlg-pre").textContent = tabs[cur].code;
@@ -2589,7 +2777,10 @@ const TEMPLATES = {
     const s = buildGraph("uiux-sweep", "画面の操作不備を洗い出し、直しきる",
       ["実際に操作して再現できた", "コンソールにエラーが出ていない"], { max: 60, conc: 8 }, [
         { k: "fanout", t: "操作パターンを洗い出す", d: [],
-          j: "渡された画面の、指定された領域について、人が取りうる操作を洗い出してテストケースにします。再現手順は、誰がやっても同じ結果になるまで具体的に書きます。開く先（URLなど）を再現手順の1行目に必ず含めます。後の段はこの手順だけを見て実際に操作するので、ここに書かれていない画面には辿り着けません。",
+          j: "渡された画面の、指定された領域について、人が取りうる操作を洗い出してテストケースにします。再現手順は、誰がやっても同じ結果になるまで具体的に書きます。開く先（URLなど）を再現手順の1行目に必ず含めます。後の段はこの手順だけを見て実際に操作するので、ここに書かれていない画面には辿り着けません。"
+            + "\n\n🔴 ここでは直しません。洗い出すだけです。ファイルを1文字も書き換えないでください。"
+            + "\n理由: この段は8体が同時に走ります。直し始めると、8体が同じファイルを奪い合って互いの変更を潰します。"
+            + "しかも誰が何を変えたのかが記録に残らないので、後の段の検証が効きません。",
           items: ["部品箱", "図面（キャンバス）", "右パネル", "段の挿入", "表題欄と書き出し", "読込と保存", "キーボード操作", "明暗と画面幅"],
           o: [["action", "string"], ["steps", "array"], ["expected", "string"]],
           f: "手順を具体化できないものは出さず、理由を残す", multi: true },
@@ -2597,10 +2788,21 @@ const TEMPLATES = {
         { k: "synthesize", t: "テスト一覧にする", d: [1],
           j: "テストケースを、実施する順に並べた一覧にします。",
           o: [["cases", "array"]], f: "実施できないものは落として理由を書く" },
+        /* 🔴 実測で、この段の担当がテストしながら自分でコードを直した（41回）。
+              そのうえで「51件中0件が失敗」と報告したので、次の段は直すものが無くなり、
+              検証者は「直すものが無いのは正しい」と合格を出した。
+              ＝実際に行われた413行の変更を、誰も検証しないまま通ることになる。
+              検証は正しく働いていて、渡す相手が入れ替わっていた。指示で止める。 */
         { k: "single", t: "テストを実施する", d: [2],
-          j: "テスト一覧を、実際にブラウザを操作して実施します。開く先は、各テストの再現手順に書かれた画面です。⚠ ブラウザは1つしかないので直列に行います（並列にすると互いのブラウザを奪い合います）。",
+          j: "テスト一覧を、実際にブラウザを操作して実施します。開く先は、各テストの再現手順に書かれた画面です。"
+            + "\n\n🔴 ここでは直しません。落ちたものは、落ちたまま記録して次へ進みます。"
+            + "ファイルを1文字も書き換えないでください。"
+            + "\n理由: ここで直すと、自分が直したものを自分でテストすることになります。"
+            + "すると次の段には直すものが残らず、検証者が受け取るのは「直した結果」ではなく「何もしなかった記録」になります。"
+            + "実際に行った変更は誰にも検証されないまま通ります。直すのは次の段の担当です。"
+            + "\n\n⚠ ブラウザは1つしかないので直列に行います（並列にすると互いのブラウザを奪い合います）。",
           o: [["results", "array"], ["failed", "number"]],
-          f: "操作そのものができない場合は、成功扱いにせず失敗として記録する" },
+          f: "操作そのものができない場合は、成功扱いにせず失敗として記録する。直したくなっても直さず、失敗として残す" },
         { k: "single", t: "落ちたものを直す", d: [3], writes: true,
           j: "失敗したテストの原因を探して直します。仕様を変えないと直らないものは直さず、印を付けて残します。",
           o: [["fixed", "array"]], f: "原因を特定できないものは直さず、理由を残す" },
@@ -2612,7 +2814,7 @@ const TEMPLATES = {
     s.loop = { from: s.nodes[3].id, to: s.nodes[5].id, max: 5, dry: 2 };
     s.input = {
       name: "対象の画面",
-      desc: "起動時に、触ってほしい画面のURLと、その画面が何であるかを渡します。ここが無いと、洗い出しが「どの画面か」を知らないまま始まります。",
+      desc: "起動時に、触ってほしい画面のURLと、その画面が何であるかを渡します。ここが無いと、洗い出しが「どの画面か」を知らないまま始まります。実測では、触ってよい範囲を書いておいてもその外にファイルが作られたので、書き換えてよいファイルの場所も一緒に渡してください。",
       sample: "http://127.0.0.1:7391/ — 業務フローを図で設計して書き出す設計盤",
     };
     return s;
@@ -2694,18 +2896,51 @@ function build(name, goal, anchors, caps, rows) {
 }
 
 /* ══ 配線 ══════════════════════════════════════════════ */
-document.querySelectorAll(".part").forEach(b => b.onclick = () => {
+function 部品を置く(kind) {
   // 起動時の入力は部品ではなく図面に1つだけ。置き場所は部品箱に揃える。
-  if (b.dataset.k === "input") {
-    if (!S.input.name.trim()) S.input = { name: "入力", desc: "", sample: "" };
+  if (kind === "input") {
+    /* 🔴 以前はここで新品に差し替えていたので、書いてあった説明と例が黙って消えた。
+       名前が空なら名前だけ入れる。書いたものには触らない。 */
+    if (!S.input.name.trim()) S.input = { ...S.input, name: "入力" };
     sel = "__input__"; render();
     document.querySelector(".col.right").scrollTop = 0;
+    図面に映す("__input__");
     return;
   }
-  const n = newNode(b.dataset.k);
+  if (!KIND[kind]) return;
+  const n = newNode(kind);
   S.nodes.push(n); sel = n.id; render();
   document.querySelector(".col.right").scrollTop = 0;
+  図面に映す(n.id);          // 置いた部品が枠の外だと、置けたことが分からない
+}
+
+/* 押しても置けるし、図面へドラッグしても置ける。
+   ドラッグできそうな見た目なのに掴めないのが一番たちが悪いので、両方に応える。 */
+const DND = "text/graphflow-part";
+document.querySelectorAll(".part").forEach(b => {
+  b.onclick = () => 部品を置く(b.dataset.k);
+  b.draggable = true;
+  b.addEventListener("dragstart", e => {
+    e.dataTransfer.effectAllowed = "copy";
+    e.dataTransfer.setData(DND, b.dataset.k);
+    e.dataTransfer.setData("text/plain", b.dataset.k);
+  });
 });
+{
+  const wrap = document.querySelector(".canvas-wrap");
+  const 部品か = e => [...(e.dataTransfer ? e.dataTransfer.types : [])].includes(DND);
+  wrap.addEventListener("dragover", e => {
+    if (!部品か(e)) return;
+    e.preventDefault(); e.dataTransfer.dropEffect = "copy";
+    wrap.classList.add("drop-here");
+  });
+  wrap.addEventListener("dragleave", e => { if (e.target === wrap) wrap.classList.remove("drop-here"); });
+  wrap.addEventListener("drop", e => {
+    if (!部品か(e)) return;
+    e.preventDefault(); wrap.classList.remove("drop-here");
+    部品を置く(e.dataTransfer.getData(DND));
+  });
+}
 $("#f-name").oninput = e => { S.name = e.target.value.trim(); scheduleRender(); };
 $("#f-goal").oninput = e => { S.goal = e.target.value; scheduleRender(); };
 $("#f-cap").oninput = e => { S.caps.max = +e.target.value || 0; scheduleRender(); };
@@ -2721,19 +2956,31 @@ Object.keys(TEMPLATES).forEach(k => {
 /* 🔴 「ノードがあるか」で聞くと、ひな形を読んだ直後にも必ず聞かれる。
    まだ1文字も直していないのに「消えます」と言われるので、ひな形の見比べができない。
    読んだ直後の姿を覚えておき、そこから変わっていなければ手つかずとみなす。 */
+/* 🔴 「ノードがあるか」で見てはいけない。部品を置く前に図面名・目的・アンカーだけ
+   書いた状態は、本人にとっては立派な描きかけなのに、無警告で消えていた。
+   読んだ直後の姿と1文字でも違えば描きかけとみなす。 */
 let 手つかずの姿 = JSON.stringify(blank());
-const 描きかけ = () => S.nodes.length > 0 && JSON.stringify(S) !== 手つかずの姿;
+const 描きかけ = () => JSON.stringify(S) !== 手つかずの姿;
 const 読み込んだ = () => { 手つかずの姿 = JSON.stringify(S); };
+
+/* 🔴 描いた図面はどこにも残らない。再読み込み・タブを閉じるで丸ごと消える。
+   保存していないものがあるときだけ、閉じる前に一度止める。 */
+window.addEventListener("beforeunload", e => {
+  if (!描きかけ()) return;
+  e.preventDefault();
+  e.returnValue = "";
+});
 
 /* 🔴 confirm() と alert() は使わない。
    サンドボックス（Artifact の iframe など）では黙って false が返るので、
    「ダイアログも出ないのに、何も起きない」という一番たちの悪い状態になる。
    ⇒ 確認は <dialog> で自前に出す。これはただのHTML要素なので、どこでも出る。 */
-function 確かめる(本文, 補足) {
+function 確かめる(本文, 補足, はいの文字) {
   return new Promise(res => {
     const d = $("#ask");
     $("#ask-msg").textContent = 本文;
     $("#ask-sub").textContent = 補足 || "";
+    $("#ask-yes").textContent = はいの文字 || "読み込む";
     let 済 = false;
     const 閉じる = v => { if (済) return; 済 = true; d.close(); res(v); };
     $("#ask-yes").onclick = () => 閉じる(true);
@@ -2779,6 +3026,9 @@ $("#btn-load").onclick = () => {
     if (捨てる && !await 確かめる(
       `いま描いている図面「${S.name || "無題"}」は消えます。読み込みますか？`,
       `読み込んだ後でも ${戻すキー} で1回だけ戻せます。`)) return;
+    /* 🔴 読み込みに失敗したときに控えを差し替えたままにすると、
+       直前の削除を戻す1手ぶんが、何も変わっていないのに消える。 */
+    const 元の控え = undoSnap;
     if (捨てる) snapshot();
     const r = new FileReader();
     r.onload = () => {
@@ -2788,8 +3038,16 @@ $("#btn-load").onclick = () => {
         S = normalize(d); seq = S.nodes.length;
         S.nodes.forEach(n => { const m = /^n(\d+)$/.exec(n.id); if (m) seq = Math.max(seq, +m[1]); });
         sel = null; 読み込んだ(); render();
-        知らせる(捨てる ? `読み込みました（前の図面に戻すなら ${戻すキー}）` : "読み込みました");
-      } catch (e) { 知らせる("この図面は読めません: " + e.message); }
+        // 読めなかった部品があったなら、成功の顔をしない
+        const 欠け = 読み落とし ? `。⚠ 読めない部品 ${読み落とし}件を外しました（その部品に入っていた線も一緒に消えています）` : "";
+        知らせる((捨てる ? `読み込みました（前の図面に戻すなら ${戻すキー}）` : "読み込みました") + 欠け);
+      } catch (e) {
+        undoSnap = 元の控え;      // 図面は何も変わっていない。控えも元に戻す
+        /* 生の英語例外文を出しても打つ手が分からない。何を選べばいいかまで書く。 */
+        知らせる("このファイルは GraphFlow の図面ではありません。"
+          + "書き出しで作った .graphflow.json を選んでください"
+          + `（読めなかった理由: ${e.message}）`);
+      }
     };
     r.readAsText(f);
   };
@@ -2805,7 +3063,28 @@ $("#dlg-dl").onclick = () => {
   const a = el("a"); a.href = URL.createObjectURL(b); a.download = tabs[cur].file; a.click();
   URL.revokeObjectURL(a.href); $("#dlg-msg").textContent = "ダウンロードしました";
 };
+/* 保存先に同じ名前のファイルがあるか、書く前に聞く。
+   ここで聞かないと、手で書いたファイルが無確認で潰れて、事後報告だけが残る。 */
+async function 既にあるファイル(names) {
+  try {
+    const r = await fetch("/write", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ probe: true, files: names.map(n => ({ name: n, code: "" })) }),
+    });
+    const t = await r.text();
+    const j = t ? JSON.parse(t) : null;
+    return r.ok && j && Array.isArray(j.exists) ? j.exists : [];
+  } catch { return []; }
+}
+
 $("#dlg-save").onclick = async () => {
+  const 既存 = await 既にあるファイル(tabs.map(t => t.file));
+  if (既存.length && !await 確かめる(
+    `${既存.join("、")} は既にあります。上書きしますか？`,
+    "上書きすると、いまその中に書かれている内容は戻せません。", "上書きする")) {
+    $("#dlg-msg").textContent = "保存をやめました（ファイルはそのままです）";
+    return;
+  }
   $("#dlg-msg").textContent = "保存中…";
   let res;
   try {
@@ -2834,8 +3113,12 @@ $("#dlg-save").onclick = async () => {
     return;
   }
   const ow = (j.overwritten || []).length;
+  /* 🔴 図面名をそのまま案内していたので、ゲートで割れた図面では
+     実在しないコマンド（/article-build）を教えていた。実際に置いたファイルから作る。 */
+  const 一枚目 = tabs.find(t => /\.js$/.test(t.file));
+  const 起動名 = 一枚目 ? 一枚目.file.replace(/\.js$/, "") : S.name;
   $("#dlg-msg").textContent = `${j.written.length}件を保存しました`
-    + (ow ? `（うち${ow}件を上書き）` : "") + ` → /${S.name} で起動できます`;
+    + (ow ? `（うち${ow}件を上書き）` : "") + ` → /${起動名} で起動できます`;
 };
 
 /* 図面の余白を押したら選択を外す。「選ぶ」があって「やめる」が無いと、
@@ -2854,11 +3137,21 @@ document.addEventListener("keydown", e => {
   if (e.key === "Escape" && !$("#dlg").open && sel !== null) { sel = null; render(); }
 });
 
+/* 明暗。押すたびに必ず見た目が変わり、選んだ側は次に開いても残る。 */
+const THEME_KEY = "graphflow.theme";
+function applyTheme(t, persist) {
+  document.documentElement.setAttribute("data-theme", t);
+  const b = $("#btn-theme");
+  const label = t === "dark" ? "明るい配色にする" : "暗い配色にする";
+  b.textContent = t === "dark" ? "◑" : "◐";
+  b.title = label;
+  b.setAttribute("aria-label", label);
+  b.setAttribute("aria-pressed", t === "dark" ? "true" : "false");
+  if (persist) { try { localStorage.setItem(THEME_KEY, t); } catch (e) {} }
+}
+applyTheme(document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light", false);
 $("#btn-theme").onclick = () => {
-  const cur = document.documentElement.getAttribute("data-theme");
-  const next = cur === "dark" ? "light" : cur === "light" ? "" : "dark";
-  next ? document.documentElement.setAttribute("data-theme", next)
-       : document.documentElement.removeAttribute("data-theme");
+  applyTheme(document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark", true);
 };
 
 /* graphflow コマンドから図面を渡された場合はそれを開く */
