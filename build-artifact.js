@@ -25,10 +25,19 @@ const title = pick(/<title>([\s\S]*?)<\/title>/, "<title>");
 const style = pick(/<style>([\s\S]*?)<\/style>/, "<style>");
 const body = pick(/<body>([\s\S]*?)<\/body>/, "<body>");
 
+/* 🔴 <head> の中のスクリプトを黙って落としていた。
+   実際に落ちたのが「描画前に配色を確定させる」処理で、Artifact 側だけ
+   一瞬もう片方の色が出るようになっていた（しかも何も言わずに）。
+   Artifact は <head> を後から被せるので、body の先頭へ回して同じ順序で走らせる。 */
+const head = html.slice(html.indexOf("<head>"), html.indexOf("</head>"));
+const headScripts = [...head.matchAll(/<script>[\s\S]*?<\/script>/g)].map(m => m[0]);
+if (headScripts.length) console.log(`  <head> のスクリプト ${headScripts.length}件を body の先頭へ移しました`);
+
 const out = `<title>${title}</title>
 <style>
 ${style.trim()}
 </style>
+${headScripts.join("\n")}
 ${body.trim()}
 `;
 

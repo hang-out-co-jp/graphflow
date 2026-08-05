@@ -368,6 +368,17 @@ pre{
   .tb-actions{grid-column:1/-1}
 }
 </style>
+<script>
+/* 描画前に配色を確定させる。後から当てると一瞬もう片方の色が出る。 */
+(function(){
+  var t = null;
+  try { t = localStorage.getItem("graphflow.theme"); } catch (e) {}
+  if (t !== "dark" && t !== "light") {
+    t = window.matchMedia && window.matchMedia("(prefers-color-scheme:dark)").matches ? "dark" : "light";
+  }
+  document.documentElement.setAttribute("data-theme", t);
+})();
+</script>
 <div class="app">
 
 <header>
