@@ -121,10 +121,13 @@ for (let i = 0; i < 引数.length; i += 2) {
 
   /* (a) 素の agent( が残っていないか。
          上限を効かせるには全部 spawn( 経由でなければならない。
-         コメントとプロンプトを消したうえで、ラッパ自身の呼び出しだけを許す。 */
+         コメントとプロンプトを消したうえで、ラッパ自身の呼び出しだけを許す。
+         ⚠ ラッパの中の呼び出しは1つとは限らない。「書けない担当が見つからなければ
+            書ける状態でもう一度」の作り込みで2つになる。第1引数が p のものを
+            ラッパ自身とみなす（外の呼び出しは実際の値を渡すので p にならない）。 */
   const 動く = 動く部分だけ(code);
   const 裸のagent = [...動く.matchAll(/(?<![.\w])agent\(/g)]
-    .filter(m => !/agent\(p,\s*o\)/.test(動く.slice(m.index, m.index + 16)));
+    .filter(m => !/^agent\(p,\s*[^)]*\)/.test(動く.slice(m.index, m.index + 40)));
   検査(`${名}: 素の agent( が残っていない（spawn 経由になっている）`, 裸のagent.length === 0,
     裸のagent.map(m => `  …${動く.slice(Math.max(0, m.index - 40), m.index + 30).replace(/\s+/g, " ")}`).join("\n"));
 

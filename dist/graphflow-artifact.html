@@ -840,13 +840,18 @@ function inspect() {
       const w = n.kind === "fanout" ? Math.max(1, n.items.filter(Boolean).length) : 1;
       同時[rk[n.id]] = (同時[rk[n.id]] || 0) + w;
     });
+    /* 🔴 以前は「同時に2本以上走る段」だけ聞いていた。上書き事故だけを見ていたから。
+       いまはこの答えで、書けない担当に回すかどうかが決まる＝1本しか走らない段でも要る。
+       実測で、1本しか走らない「テストを実施する」が自分でコードを直し、
+       その変更を誰も検証しないまま通った。だから全部の仕事に聞く。 */
     S.nodes.forEach(n => {
       if (n.kind === "gate" || n.kind === "reduce") return;
-      if ((同時[rk[n.id]] || 0) < 2) return;          // 1本しか走らない段は関係ない
-      if (!n.fileChecked)
-        push("K-33", `「${n.title || KIND[n.kind].ja}」は同時に走る段にあります。`
-          + `右の「この仕事はファイルを書き換えますか」に答えてください`
-          + `（同時にファイルを書くと、互いの変更を上書きします）`, n);
+      if (n.fileChecked) return;
+      const 同時に走る = (同時[rk[n.id]] || 0) >= 2;
+      push("K-33", `「${n.title || KIND[n.kind].ja}」の「この仕事はファイルを書き換えますか」が未回答です。`
+        + `「書き換えない」と答えると、その段は書く道具を持たない担当で走ります`
+        + `（指示だけでは止まりません）。`
+        + (同時に走る ? `また、この段は同時に走るので、全員が書くと互いの変更を上書きします。` : ""), n);
     });
   }
 
@@ -1742,9 +1747,15 @@ function drawInspector() {
     l.appendChild(s2);
     ps.appendChild(l);
     ps.appendChild(el("p", "hint",
-      "同じ段で2本以上が同時に走るとき、全員が同じファイルを書くと互いの変更を上書きします。"
-      + "機械には判断できないので、ここだけ人が答えます。"
-      + "「書き換える」を選ぶと、その段が同時に走るときだけ別の作業コピーで動かします。"));
+      "🔴「書き換えない」を選ぶと、その段は書く道具を持たない担当で走ります"
+      + "（Edit・Write のほか Bash と Agent も外れます。Bash があれば printf や rm で書けてしまい、"
+      + "Agent があれば別の担当を呼んで書けてしまうためです。ブラウザ操作や読むことはできます）。"
+      + "＝コマンドの実行が要る段は「書き換える」を選んでください。"
+      + "指示に「直さないでください」と書くだけでは止まりません。実測で、テストする担当が"
+      + "テストしながら自分で直し、その変更を誰も検証しないまま通りました。"
+      + "／「書き換える」を選ぶと、その段が同時に走るときだけ別の作業コピーで動かします"
+      + "（全員が同じファイルを書くと互いの変更を上書きするため）。"
+      + "機械には判断できないので、ここだけ人が答えます。"));
   }
   if (n.kind !== "gate")
     ps.appendChild(check("不可逆な行動を含む", n.irreversible, v => n.irreversible = v,
@@ -2143,7 +2154,23 @@ function generate() {
     L.push("    return Promise.resolve(null)");
     L.push("  }");
     L.push("  発火数++");
-    L.push("  return agent(p, o)");
+    L.push("  if (!o || !o.agentType) return agent(p, o)");
+    L.push("  /* 🔴 「書き換えない」段は、指示ではなく道具を取り上げて止める。");
+    L.push("     実測で、テストする担当がテストしながら自分でコードを直し、自分が直した");
+    L.push("     ものをテストして「失敗0件」と報告した。次の段には直すものが残らず、");
+    L.push("     検証者は「直すものが無いのは正しい」と合格を出した。");
+    L.push("     ＝実際に行われた変更を、誰も検証しないまま通る。指示では止まらなかった。");
+    L.push("     ⚠ この担当はプラグインが持っている。プラグインを入れずにこのファイルだけを");
+    L.push("        置いた場合は見つからないので、そのときは書ける状態で続ける。");
+    L.push("        ただし黙って落とさない。必ず言う。 */");
+    L.push("  return agent(p, o).catch(e => {");
+    L.push("    const { agentType, ...書ける } = o");
+    L.push("    log(`⚠ 「${o.label || \"名前なし\"}」を、ファイルを書けない担当で走らせようとしましたが`");
+    L.push("      + ` 見つかりませんでした（${(e && e.message) || e}）。書ける状態のまま続けます。`");
+    L.push("      + ` この段が成果物を書き換えても、機械には止められません。`");
+    L.push("      + ` 止めるにはプラグインとして入れてください: /plugin install graphflow@hangout`)");
+    L.push("    return agent(p, 書ける)");
+    L.push("  })");
     L.push("}");
     /* 🔴 上限を、手前の段が食い尽くさないようにする。
        検証は上流の返却件数ぶん増えるので、放っておくと枠を全部使う。
@@ -2179,6 +2206,16 @@ function generate() {
       同時本数[rk[x.id]] = (同時本数[rk[x.id]] || 0) + w;
     });
     const 分離が要る = n => n.writesFiles && (同時本数[rk[n.id]] || 0) > 1;
+    /* 🔴 「書き換えない」と答えた段は、指示ではなく道具を取り上げて止める。
+       拒否リスト方式なので、ブラウザ操作(MCP)も読むことも今までどおりできる。
+       外れるのは Edit / Write / NotebookEdit / Bash / PowerShell / Agent だけ。
+       Bash を残すと `printf > file` や `rm -f` で書けてしまい（実測で両方使われた）、
+       Agent を残すと別の担当を呼んで書けてしまうので、この2つは外さないと嘘になる。
+       ＝コマンドの実行が要る段は「書き換える」と答えるのが正しい。 */
+    const 書けなくする = n =>
+      n.fileChecked && !n.writesFiles
+        ? [`      agentType: "graphflow:no-write",   // ファイルを書く道具を持たせない`]
+        : [];
 
     const depsOf = n => n.deps.filter(d => done.has(d)).map(d => "r_" + d);
     // 🔴 ゲートをまたぐ依存は、この図面の中に相手がいない。
@@ -2220,6 +2257,7 @@ function generate() {
           `      label: \`\${対象}\`,`,
           `      phase: ${jstr(KIND[n.kind].phase)},`,
           ...(分離が要る(n) ? [`      isolation: "worktree",   // この段は同時に走るので、別の作業コピーで動かす`] : []),
+          ...書けなくする(n),
           `      schema: ${JSON.stringify(schemaOf(n))},`,
           `    })`,
           `  )).then(a => a.filter(Boolean))`,
@@ -2239,6 +2277,7 @@ function generate() {
           `    spawn(\`${verifyPrompt(n, t, 基準)}\`, {`,
           `      label: \`検証:\${i + 1}\`,`,
           `      phase: "検証",`,
+          `      agentType: "graphflow:no-write",   // 検証者は直さない。道具ごと持たせない`,
           `      schema: { type: "object", required: ["verdict", "reason"], properties: {`,
           `        verdict: { type: "string", enum: ["KEEP", "DROP", "UNVERIFIED"] },`,
           `        reason: { type: "string" },`,
@@ -2270,6 +2309,7 @@ function generate() {
         `    label: ${jstr(n.title || KIND[n.kind].ja)},`,
         `    phase: ${jstr(KIND[n.kind].phase)},`,
         ...(分離が要る(n) ? [`    isolation: "worktree",   // この段は同時に走るので、別の作業コピーで動かす`] : []),
+        ...書けなくする(n).map(s => s.replace(/^ {6}/, "    ")),
         `    schema: ${JSON.stringify(schemaOf(n))},`,
         `  })`,
       ].join("\n");

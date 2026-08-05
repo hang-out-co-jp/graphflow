@@ -128,6 +128,15 @@ const server = http.createServer(async (req, res) => {
       const t = safeTarget(f && f.name);
       if (!t) return json(res, 400, { error: `使えないファイル名です: ${f && f.name}` });
       if (typeof f.code !== "string") return json(res, 400, { error: `中身がありません: ${f.name}` });
+      /* 🔴 空を書かせない。ここが最後の砦。
+         画面側は「既にあるか下見する」ために一度 await するので、その待ちの間に
+         図面が差し替わると、空になった中身がそのまま送られてくる。
+         実測で、既にあるワークフローが0バイトで潰れた（中身は戻せない）。
+         画面側の作りに関係なく、ここで止める。 */
+      if (!f.code.trim()) return json(res, 400, {
+        error: `中身が空のまま送られてきたので書き込みませんでした: ${f.name}`
+          + "（既にあるファイルは、そのまま残っています）",
+      });
       targets.push([t, f.code]);
     }
 
