@@ -123,6 +123,23 @@ const server = http.createServer(async (req, res) => {
     if (!files || !files.length) return json(res, 400, { error: "書き出すファイルがありません" });
     if (files.length > 32) return json(res, 400, { error: "ファイル数が多すぎます" });
 
+    /* 🔴 下見（probe）＝「その名前のファイルが既にあるか」を書く前に聞く問い合わせ。
+       画面はこの答えを見て、上書きの確認を出すかどうかを決める。
+       ⚠ ここが無いと、下見が「中身が空」の判定に落ちて 400 になり、
+          画面は既存を 0件と読む＝**上書きの確認が一度も出ない**。
+          実測（2026-08-08・F-102）＝画面は成功の顔をしたまま、
+          手で書いたワークフローを無確認で上書きできる状態だった。
+       🔴 下見では絶対に書かない。中身は見ないし、受け取っても捨てる。 */
+    if (payload && payload.probe === true) {
+      const exists = [];
+      for (const f of files) {
+        const t = safeTarget(f && f.name);
+        if (!t) return json(res, 400, { error: `使えないファイル名です: ${f && f.name}` });
+        if (fs.existsSync(t)) exists.push(path.basename(t));
+      }
+      return json(res, 200, { exists });
+    }
+
     const targets = [];
     for (const f of files) {
       const t = safeTarget(f && f.name);
